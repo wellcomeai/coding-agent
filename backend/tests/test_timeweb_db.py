@@ -206,7 +206,74 @@ async def test_wait_deploy_gives_up_after_timeout(app_env, monkeypatch):
 async def test_wait_database_until_public_ip(app_env, monkeypatch):
     monkeypatch.setattr(T, "WAIT_POLL_SECONDS", 0)
     uid = await _user()
-    tw = WaitFake([], [("creating", None), ("started", None), ("started", "5.129.242.60")])
+    tw = WaitFake([], [("creating", None), ("creating", None), ("started", "5.129.242.60")])
     out, err = await run(ctx(tw, uid), "timeweb_wait_database", database_id=777)
     data = json.loads(out)
     assert not err and data["ready"] and data["public_ip"] == "5.129.242.60"
+
+
+class IpFake(DbFake):
+    """База запускается только с локальной сетью; публичный IP появляется после привязки плавающего IP."""
+
+    def __init__(self, bound_already=False):
+        super().__init__(db_status="started", ip=None)
+        self.fips = [{"id": "f0", "resource_type": "database", "resource_id": 777, "availability_zone": "msk-1"}] if bound_already else []
+        self.created_fips, self.binds = [], []
+
+    async def request(self, method, path, **kw):
+        if path == "/api/v1/databases/777":
+            body = await super().request(method, path, **kw)
+            body["db"]["availability_zone"] = "msk-1"
+            if self.binds:
+                self.ip = "5.129.242.61"
+            return body
+        if path == "/api/v1/floating-ips" and method == "GET":
+            return {"ips": self.fips, "meta": {}}
+        if path == "/api/v1/floating-ips" and method == "POST":
+            self.created_fips.append(kw["json"])
+            return {"ip": {"id": "f1", "ip": "5.129.242.61", "availability_zone": kw["json"]["availability_zone"]}}
+        if path == "/api/v1/floating-ips/f1/bind":
+            self.binds.append(kw["json"])
+            return {}
+        return await super().request(method, path, **kw)
+
+
+async def _agent_db(uid):
+    from app import timeweb_db
+
+    await timeweb_db.save(uid, 777, "shop-db", "postgres16", "app", "u1", "secret-pass")
+
+
+async def test_wait_database_attaches_public_ip_to_agent_database(app_env, monkeypatch):
+    monkeypatch.setattr(T, "WAIT_POLL_SECONDS", 0)
+    uid = await _user()
+    await _agent_db(uid)
+    tw = IpFake()
+    out, err = await run(ctx(tw, uid), "timeweb_wait_database", database_id=777)
+    data = json.loads(out)
+    assert not err and data["ready"] and data["public_ip"] == "5.129.242.61"
+    assert data["public_ip_enabled_automatically"] is True
+    assert tw.created_fips == [{"is_ddos_guard": False, "availability_zone": "msk-1"}]
+    assert tw.binds == [{"resource_type": "database", "resource_id": 777}]
+
+
+async def test_wait_database_does_not_pay_for_foreign_database(app_env, monkeypatch):
+    monkeypatch.setattr(T, "WAIT_POLL_SECONDS", 0)
+    uid = await _user()
+    tw = IpFake()
+    data = json.loads((await run(ctx(tw, uid), "timeweb_wait_database", database_id=777))[0])
+    assert not data["ready"] and "timeweb_enable_db_public_ip" in data["note"]
+    assert tw.created_fips == [] and tw.binds == []
+
+
+async def test_enable_public_ip_needs_confirmation_and_does_not_duplicate(app_env):
+    uid = await _user()
+    tw = IpFake()
+    out, err = await run(ctx(tw, uid), "timeweb_enable_db_public_ip", database_id=777, confirmed=False)
+    assert err and not tw.binds
+    out, err = await run(ctx(tw, uid), "timeweb_enable_db_public_ip", database_id=777, confirmed=True)
+    assert not err and len(tw.binds) == 1
+
+    tw = IpFake(bound_already=True)  # IP уже привязан, но у базы ещё не виден — второй не создаём
+    out, err = await run(ctx(tw, uid), "timeweb_enable_db_public_ip", database_id=777, confirmed=True)
+    assert not err and tw.created_fips == [] and "привязывается" in out

@@ -522,9 +522,9 @@ async def t_timeweb_create_database(
     await timeweb_db.save(ctx.user_id, cluster_id, name, db_type, db_name, login, password)
     return (
         f"База создаётся: id={cluster_id}, тип {db_type}, база «{db_name}», пользователь {login}. "
-        "Пароль сгенерирован и сохранён на сервере (вам он не нужен). Дождитесь статуса started через "
-        "timeweb_database_status, затем подключите к приложению: timeweb_connect_database или "
-        "timeweb_create_app с database_id."
+        "Пароль сгенерирован и сохранён на сервере (вам он не нужен). Дождитесь готовности через "
+        "timeweb_wait_database (он же включит базе публичный IP), затем подключите к приложению: "
+        "timeweb_connect_database или timeweb_create_app с database_id."
     )
 
 
@@ -542,18 +542,64 @@ async def t_timeweb_database_status(ctx: ToolContext, database_id: int) -> str:
     return json.dumps(info, ensure_ascii=False)
 
 
+async def _ensure_db_public_ip(ctx: ToolContext, database_id: int) -> str | None:
+    """Привязать к базе плавающий IP: без него приложение базу не видит. Повторный вызов не создаёт второй IP.
+
+    Возвращает IP, если он уже виден у базы, иначе None (привязка применяется не мгновенно).
+    """
+    tw = _tw(ctx)
+    db = await tw.get_database(int(database_id))
+    if ip := db_public_ip(db):
+        return ip
+    for fip in await tw.list_floating_ips():
+        if fip.get("resource_type") == "database" and str(fip.get("resource_id")) == str(database_id):
+            return None  # уже привязан, ждём, пока появится у базы
+    zone = db.get("availability_zone")
+    if not zone:
+        raise ToolError("Timeweb не вернул зону доступности базы, публичный IP включить не удалось.")
+    try:
+        fip = await tw.create_floating_ip(zone)
+        await tw.bind_floating_ip(fip["id"], "database", int(database_id))
+    except TimewebError as e:
+        raise ToolError(f"Timeweb не выдал базе публичный IP: {e}") from e
+    return None
+
+
+async def t_timeweb_enable_db_public_ip(ctx: ToolContext, database_id: int, confirmed: bool) -> str:
+    if not confirmed:
+        raise ToolError("Публичный IP платный. Сначала получите согласие пользователя.")
+    ip = await _ensure_db_public_ip(ctx, database_id)
+    if ip:
+        return f"У базы {database_id} есть публичный IP {ip}."
+    return f"Публичный IP привязывается к базе {database_id}. Дождитесь его через timeweb_wait_database."
+
+
 async def t_timeweb_wait_database(ctx: ToolContext, database_id: int, timeout_minutes: float = 15) -> str:
     deadline = _wait_deadline(timeout_minutes)
+    ip_requested = False
     while True:
         info = json.loads(await t_timeweb_database_status(ctx, database_id))
-        if info["ready"] or time.monotonic() >= deadline:
+        if info["ready"]:
+            break
+        if info["status"] == "started" and not info["public_ip"]:
+            # Timeweb запускает базу только с локальной сетью: публичный IP надо привязать отдельно
+            if not info["created_by_agent"]:
+                info["note"] = (
+                    "База запущена, но у неё нет публичного IP, поэтому приложение её не увидит. Включить его можно "
+                    "через timeweb_enable_db_public_ip (платно: сначала спросите пользователя)."
+                )
+                return json.dumps(info, ensure_ascii=False)
+            if not ip_requested:
+                await _ensure_db_public_ip(ctx, database_id)
+                ip_requested = True
+                info["public_ip"] = "привязывается"
+        if time.monotonic() >= deadline:
             break
         await asyncio.sleep(WAIT_POLL_SECONDS)
+    if ip_requested:
+        info["public_ip_enabled_automatically"] = True
     if not info["ready"]:
-        info["note"] = (
-            "База ещё не готова (статус started и публичный IP). Можно подождать ещё раз тем же инструментом; "
-            "если статус started, а IP так и не появился, сообщите пользователю."
-        )
+        info["note"] = "База ещё не готова. Можно подождать ещё раз тем же инструментом."
     return json.dumps(info, ensure_ascii=False)
 
 
@@ -760,7 +806,9 @@ TIMEWEB_TOOLS: list[tuple[dict, Callable]] = [
         _fn(
             "timeweb_create_database",
             "Create a managed database (cluster + database + user). Credentials are generated and stored by the "
-            "server; you never see the password. PAID: requires explicit user confirmation.",
+            "server; you never see the password. The app reaches it via a public IP, which timeweb_wait_database "
+            "attaches automatically and which is billed separately by Timeweb. PAID: requires explicit user "
+            "confirmation of both the tariff and the public IP.",
             {
                 "name": {**S, "description": "cluster name, e.g. myapp-db"},
                 "db_type": {**S, "description": "exact type from timeweb_db_options, e.g. postgres16"},
@@ -784,12 +832,22 @@ TIMEWEB_TOOLS: list[tuple[dict, Callable]] = [
     (
         _fn(
             "timeweb_wait_database",
-            "Wait on the server until a database is ready to connect (status started and public IP), up to "
-            "timeout_minutes (max 25). Use instead of sleep loops.",
+            "Wait on the server until a database is ready to connect, up to timeout_minutes (max 25). Attaches a "
+            "public IP to databases created by timeweb_create_database once they start. Use instead of sleep loops.",
             {"database_id": I, "timeout_minutes": I},
             ["database_id"],
         ),
         t_timeweb_wait_database,
+    ),
+    (
+        _fn(
+            "timeweb_enable_db_public_ip",
+            "Attach a public IP to an existing database so apps can reach it (e.g. a database that was started "
+            "without one). PAID (billed by Timeweb): requires explicit user confirmation.",
+            {"database_id": I, "confirmed": {**B, "description": "true only if the user agreed to pay for the IP"}},
+            ["database_id", "confirmed"],
+        ),
+        t_timeweb_enable_db_public_ip,
     ),
     (
         _fn(
