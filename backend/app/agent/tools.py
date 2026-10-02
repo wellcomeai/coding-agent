@@ -415,6 +415,15 @@ async def t_timeweb_wait_deploy(
     elif status != "success":
         logs = await tw.deploy_logs(str(app_id), str(d["id"]))
         out["deploy_logs_tail"] = truncate("\n".join(logs[-80:]) or "Логи пусты", 8000)
+        try:
+            runtime = "\n".join(await tw.app_logs(str(app_id)))[-20000:]
+        except Exception:  # noqa: BLE001 — логи приложения нужны только для подсказки
+            runtime = ""
+        if any(m in (out["deploy_logs_tail"] + runtime) for m in ("CONNECT privilege", "permission denied for database")):
+            out["hint"] = (
+                "Приложению не хватает прав в базе (известный баг Timeweb). Вызовите timeweb_fix_database_access "
+                "для этой базы, затем timeweb_deploy."
+            )
     return json.dumps(out, ensure_ascii=False)
 
 
@@ -526,7 +535,7 @@ async def t_timeweb_create_database(
     return (
         f"База создаётся: id={cluster_id}, тип {db_type}, база «{db_name}», пользователь {login}. "
         "Пароль сгенерирован и сохранён на сервере (вам он не нужен). Дождитесь готовности через "
-        "timeweb_wait_database (он же включит базе публичный IP), затем подключите к приложению: "
+        "timeweb_wait_database (он же включит публичный IP и выдаст права), затем подключите к приложению: "
         "timeweb_connect_database или timeweb_create_app с database_id."
     )
 
@@ -545,65 +554,124 @@ async def t_timeweb_database_status(ctx: ToolContext, database_id: int) -> str:
     return json.dumps(info, ensure_ascii=False)
 
 
-async def _ensure_db_public_ip(ctx: ToolContext, database_id: int) -> str | None:
-    """Привязать к базе плавающий IP: без него приложение базу не видит. Повторный вызов не создаёт второй IP.
+# Повторная выдача прав (обход бага Timeweb: сразу после создания права видны в панели, но в самой БД их нет —
+# приложение падает с «User does not have CONNECT privilege»). Список как в проверенном deploy_timeweb.py.
+REGRANT_PRIVILEGES = {
+    "postgres": ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "TRUNCATE", "REFERENCES", "TRIGGER", "TEMPORARY", "CONNECT"],
+}
+PUBLIC_IP_FALLBACK_SECONDS = 180
 
-    Возвращает IP, если он уже виден у базы, иначе None (привязка применяется не мгновенно).
-    """
-    tw = _tw(ctx)
-    db = await tw.get_database(int(database_id))
-    if ip := db_public_ip(db):
-        return ip
+
+async def _enable_public_network(tw: TimewebClient, database_id: int, db: dict, use_floating_ip: bool) -> None:
+    """Основной способ — флаг публичной сети у кластера; запасной — плавающий IP. Повторно не создаёт второй IP."""
+    if not use_floating_ip:
+        try:
+            await tw.update_database(int(database_id), {"is_enabled_public_network": True})
+            return
+        except TimewebError as e:
+            log.warning("Timeweb не включил публичную сеть базы %s: %s — пробую плавающий IP", database_id, e)
     for fip in await tw.list_floating_ips():
         if fip.get("resource_type") == "database" and str(fip.get("resource_id")) == str(database_id):
-            return None  # уже привязан, ждём, пока появится у базы
+            return  # уже привязан, ждём, пока появится у базы
     zone = db.get("availability_zone")
     if not zone:
         raise ToolError("Timeweb не вернул зону доступности базы, публичный IP включить не удалось.")
+    fip = await tw.create_floating_ip(zone)
+    await tw.bind_floating_ip(fip["id"], "database", int(database_id))
+
+
+async def _regrant_privileges(tw: TimewebClient, database_id: int, db_type: str, instance_name: str | None) -> bool:
+    family = db_family(db_type)
+    privileges = REGRANT_PRIVILEGES.get(family) or timeweb_db.PRIVILEGES.get(family)
+    if not privileges:
+        return False  # для Redis/Valkey и др. прав на инстанс нет
+    admins = await tw.list_db_admins(int(database_id))
+    admin = admins[0] if admins else None
+    if not admin or admin.get("status", "created") != "created":
+        return False
+    instances = await tw.list_db_instances(int(database_id))
+    inst = next((i for i in instances if i.get("name") == instance_name), instances[0] if instances else None)
+    payload: dict[str, Any] = {"privileges": privileges}
+    if inst:
+        payload["instance_id"] = inst["id"]
     try:
-        fip = await tw.create_floating_ip(zone)
-        await tw.bind_floating_ip(fip["id"], "database", int(database_id))
-    except TimewebError as e:
-        raise ToolError(f"Timeweb не выдал базе публичный IP: {e}") from e
-    return None
+        await tw.update_db_admin(int(database_id), int(admin["id"]), payload)
+    except TimewebError:
+        if "CONNECT" not in privileges:
+            raise
+        payload["privileges"] = [p for p in privileges if p != "CONNECT"]
+        await tw.update_db_admin(int(database_id), int(admin["id"]), payload)
+    return True
 
 
-async def t_timeweb_enable_db_public_ip(ctx: ToolContext, database_id: int, confirmed: bool) -> str:
-    if not confirmed:
-        raise ToolError("Публичный IP платный. Сначала получите согласие пользователя.")
-    ip = await _ensure_db_public_ip(ctx, database_id)
-    if ip:
-        return f"У базы {database_id} есть публичный IP {ip}."
-    return f"Публичный IP привязывается к базе {database_id}. Дождитесь его через timeweb_wait_database."
+async def _prepare_database(ctx: ToolContext, database_id: int, timeout_minutes: float = 15) -> dict:
+    """Довести базу до рабочего состояния: запущена → есть публичный IP → права пользователя выданы повторно.
 
-
-async def t_timeweb_wait_database(ctx: ToolContext, database_id: int, timeout_minutes: float = 15) -> str:
+    Идемпотентно: можно вызывать сколько угодно раз. Возвращает состояние базы (как timeweb_database_status)
+    с ready=True, когда к ней можно подключаться из приложения.
+    """
+    tw = _tw(ctx)
+    rec = await timeweb_db.get_record(ctx.user_id, int(database_id))
     deadline = _wait_deadline(timeout_minutes)
-    ip_requested = False
+    ip_requested_at: float | None = None
+    floating_tried = False
     while True:
-        info = json.loads(await t_timeweb_database_status(ctx, database_id))
-        if info["ready"]:
-            break
-        if info["status"] == "started" and not info["public_ip"]:
-            # Timeweb запускает базу только с локальной сетью: публичный IP надо привязать отдельно
-            if not info["created_by_agent"]:
-                info["note"] = (
-                    "База запущена, но у неё нет публичного IP, поэтому приложение её не увидит. Включить его можно "
-                    "через timeweb_enable_db_public_ip (платно: сначала спросите пользователя)."
-                )
-                return json.dumps(info, ensure_ascii=False)
-            if not ip_requested:
-                await _ensure_db_public_ip(ctx, database_id)
-                ip_requested = True
-                info["public_ip"] = "привязывается"
+        db = await tw.get_database(int(database_id))
+        info = _short_db(db, rec is not None)
+        if db.get("status") == "started":
+            if info["public_ip"]:
+                break
+            now = time.monotonic()
+            if ip_requested_at is None:
+                await _enable_public_network(tw, database_id, db, use_floating_ip=False)
+                ip_requested_at = now
+            elif not floating_tried and now - ip_requested_at > PUBLIC_IP_FALLBACK_SECONDS:
+                await _enable_public_network(tw, database_id, db, use_floating_ip=True)
+                floating_tried = True
         if time.monotonic() >= deadline:
             break
         await asyncio.sleep(WAIT_POLL_SECONDS)
-    if ip_requested:
-        info["public_ip_enabled_automatically"] = True
-    if not info["ready"]:
+    info["public_ip_enabled_now"] = ip_requested_at is not None
+    info["ready"] = db.get("status") == "started" and bool(info["public_ip"])
+    if info["ready"]:
+        try:
+            info["privileges_regranted"] = await _regrant_privileges(
+                tw, database_id, db.get("type") or (rec.db_type if rec else ""), rec.db_name if rec else None
+            )
+        except TimewebError as e:
+            info["privileges_regranted"] = False
+            info["privileges_error"] = str(e)
+    else:
         info["note"] = "База ещё не готова. Можно подождать ещё раз тем же инструментом."
-    return json.dumps(info, ensure_ascii=False)
+    return info
+
+
+async def t_timeweb_fix_database_access(ctx: ToolContext, database_id: int, confirmed: bool = False) -> str:
+    rec = await timeweb_db.get_record(ctx.user_id, int(database_id))
+    if not rec and not confirmed:
+        raise ToolError(
+            "База создана не через агента: включение публичного IP платное. Сначала получите согласие пользователя."
+        )
+    return json.dumps(await _prepare_database(ctx, database_id, timeout_minutes=10), ensure_ascii=False)
+
+
+async def t_timeweb_wait_database(ctx: ToolContext, database_id: int, timeout_minutes: float = 15) -> str:
+    rec = await timeweb_db.get_record(ctx.user_id, int(database_id))
+    if not rec:
+        # Чужая база: ждём только запуска, платный IP без согласия не включаем
+        deadline = _wait_deadline(timeout_minutes)
+        while True:
+            info = json.loads(await t_timeweb_database_status(ctx, database_id))
+            if info["ready"] or info["status"] == "started" or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(WAIT_POLL_SECONDS)
+        if info["status"] == "started" and not info["public_ip"]:
+            info["note"] = (
+                "База запущена, но у неё нет публичного IP, поэтому приложение её не увидит. Включить его и выдать "
+                "права можно через timeweb_fix_database_access (платно: сначала спросите пользователя)."
+            )
+        return json.dumps(info, ensure_ascii=False)
+    return json.dumps(await _prepare_database(ctx, database_id, timeout_minutes), ensure_ascii=False)
 
 
 async def _db_envs(ctx: ToolContext, database_id: int, mode: str, env_name: str, prefix: str, url_scheme: str | None):
@@ -613,6 +681,11 @@ async def _db_envs(ctx: ToolContext, database_id: int, mode: str, env_name: str,
             "Эта база создана не через агента, её пароль неизвестен. Создайте базу через timeweb_create_database "
             "или попросите пользователя добавить переменные подключения вручную в панели Timeweb."
         )
+    # Гарантия публичной базы: даже если агент не вызвал timeweb_wait_database, перед подключением включаем
+    # публичный IP и повторно выдаём права
+    prepared = await _prepare_database(ctx, database_id, timeout_minutes=10)
+    if not prepared["ready"]:
+        raise ToolError(f"База {database_id} ещё не готова (статус {prepared['status']}). Подождите timeweb_wait_database.")
     live = await _tw(ctx).get_database(int(database_id))
     try:
         conn = timeweb_db.connection(rec, live, url_scheme)
@@ -835,8 +908,9 @@ TIMEWEB_TOOLS: list[tuple[dict, Callable]] = [
     (
         _fn(
             "timeweb_wait_database",
-            "Wait on the server until a database is ready to connect, up to timeout_minutes (max 25). Attaches a "
-            "public IP to databases created by timeweb_create_database once they start. Use instead of sleep loops.",
+            "Wait on the server until a database is ready to connect, up to timeout_minutes (max 25). For databases "
+            "created by timeweb_create_database it also enables the public IP and re-grants user privileges. Use "
+            "instead of sleep loops.",
             {"database_id": I, "timeout_minutes": I},
             ["database_id"],
         ),
@@ -844,13 +918,14 @@ TIMEWEB_TOOLS: list[tuple[dict, Callable]] = [
     ),
     (
         _fn(
-            "timeweb_enable_db_public_ip",
-            "Attach a public IP to an existing database so apps can reach it (e.g. a database that was started "
-            "without one). PAID (billed by Timeweb): requires explicit user confirmation.",
-            {"database_id": I, "confirmed": {**B, "description": "true only if the user agreed to pay for the IP"}},
-            ["database_id", "confirmed"],
+            "timeweb_fix_database_access",
+            "Make a database reachable by apps: enable its public IP and re-grant user privileges (fixes Timeweb's "
+            "'User does not have CONNECT privilege'). Safe to repeat. For databases not created by "
+            "timeweb_create_database the public IP is PAID: pass confirmed=true only after the user agreed.",
+            {"database_id": I, "confirmed": {**B, "description": "needed only for databases not created by the agent"}},
+            ["database_id"],
         ),
-        t_timeweb_enable_db_public_ip,
+        t_timeweb_fix_database_access,
     ),
     (
         _fn(

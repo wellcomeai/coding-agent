@@ -47,7 +47,7 @@ const TW: Record<string, string> = {
   timeweb_database_status: "Статус базы данных",
   timeweb_wait_database: "Ожидание базы данных",
   timeweb_connect_database: "Подключение базы",
-  timeweb_enable_db_public_ip: "Публичный IP базы",
+  timeweb_fix_database_access: "Доступ к базе",
   timeweb_set_app_env: "Переменные приложения",
 };
 

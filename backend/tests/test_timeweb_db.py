@@ -1,7 +1,7 @@
 import json
 
 from app.agent import tools as T
-from app.timeweb import HIDDEN_ENV, TimewebClient
+from app.timeweb import HIDDEN_ENV, TimewebClient, TimewebError
 from app.timeweb_db import get_record
 
 
@@ -21,6 +21,13 @@ class DbFake(TimewebClient):
         if path == "/api/v1/databases/777":
             nets = [{"type": "public", "ips": [{"type": "ipv_4", "ip": self.ip}]}] if self.ip else []
             return {"db": {"id": 777, "name": "shop-db", "type": "postgres16", "status": self.db_status, "port": 5432, "networks": nets}}
+        if path == "/api/v1/databases/777/admins" and method == "GET":
+            return {"admins": [{"id": 31, "login": "u1", "status": "created"}]}
+        if path == "/api/v1/databases/777/instances":
+            return {"instances": [{"id": 41, "name": "app"}]}
+        if path == "/api/v1/databases/777/admins/31" and method == "PATCH":
+            self.regrants = getattr(self, "regrants", []) + [kw["json"]]
+            return {}
         if path == "/api/v1/apps/5" and method == "GET":
             return {"app": {"id": 5, "branch_name": None, "envs": self.app_envs}}
         if path == "/api/v1/apps/5" and method == "PATCH":
@@ -101,13 +108,15 @@ async def test_connect_refuses_when_envs_hidden(app_env):
     assert err and "скрывает" in out and tw.patches == []
 
 
-async def test_connect_waits_for_ip_and_unknown_db(app_env):
+async def test_connect_waits_for_ip_and_unknown_db(app_env, monkeypatch):
+    monkeypatch.setattr(T, "WAIT_POLL_SECONDS", 0)
+    monkeypatch.setattr(T, "_wait_deadline", lambda _m: 0)
     uid = await _user()
     tw = DbFake(db_status="creating", ip=None)
     c = ctx(tw, uid)
     await run(c, "timeweb_create_database", name="shop-db", db_type="postgres16", preset_id=357, confirmed=True)
     out, err = await run(c, "timeweb_connect_database", app_id="5", database_id=777)
-    assert err and "публичного IP" in out
+    assert err and "не готова" in out
     out, err = await run(ctx(tw, uid), "timeweb_connect_database", app_id="5", database_id=12345)
     assert err and "не через агента" in out
 
@@ -213,25 +222,38 @@ async def test_wait_database_until_public_ip(app_env, monkeypatch):
 
 
 class IpFake(DbFake):
-    """База запускается только с локальной сетью; публичный IP появляется после привязки плавающего IP."""
+    """База запускается только с локальной сетью. public_network_works=False — флаг публичной сети не помогает
+    (проверяем запасной путь через плавающий IP)."""
 
-    def __init__(self, bound_already=False):
+    def __init__(self, public_network_works=True, bound_already=False, connect_rejected=False):
         super().__init__(db_status="started", ip=None)
+        self.public_network_works = public_network_works
+        self.connect_rejected = connect_rejected
         self.fips = [{"id": "f0", "resource_type": "database", "resource_id": 777, "availability_zone": "msk-1"}] if bound_already else []
-        self.created_fips, self.binds = [], []
+        self.db_patches, self.created_fips, self.binds, self.regrants = [], [], [], []
 
     async def request(self, method, path, **kw):
+        if path == "/api/v1/databases/777" and method == "PATCH":
+            self.db_patches.append(kw["json"])
+            if self.public_network_works:
+                self.ip = "5.129.242.61"
+            return {}
         if path == "/api/v1/databases/777":
             body = await super().request(method, path, **kw)
             body["db"]["availability_zone"] = "msk-1"
             if self.binds:
-                self.ip = "5.129.242.61"
+                self.ip = "5.129.242.62"
             return body
+        if path == "/api/v1/databases/777/admins/31" and method == "PATCH":
+            if self.connect_rejected and "CONNECT" in kw["json"]["privileges"]:
+                raise TimewebError(400, "privileges must be one of ...")
+            self.regrants.append(kw["json"])
+            return {}
         if path == "/api/v1/floating-ips" and method == "GET":
             return {"ips": self.fips, "meta": {}}
         if path == "/api/v1/floating-ips" and method == "POST":
             self.created_fips.append(kw["json"])
-            return {"ip": {"id": "f1", "ip": "5.129.242.61", "availability_zone": kw["json"]["availability_zone"]}}
+            return {"ip": {"id": "f1", "ip": "5.129.242.62", "availability_zone": kw["json"]["availability_zone"]}}
         if path == "/api/v1/floating-ips/f1/bind":
             self.binds.append(kw["json"])
             return {}
@@ -244,7 +266,7 @@ async def _agent_db(uid):
     await timeweb_db.save(uid, 777, "shop-db", "postgres16", "app", "u1", "secret-pass")
 
 
-async def test_wait_database_attaches_public_ip_to_agent_database(app_env, monkeypatch):
+async def test_wait_database_enables_public_network_and_regrants(app_env, monkeypatch):
     monkeypatch.setattr(T, "WAIT_POLL_SECONDS", 0)
     uid = await _user()
     await _agent_db(uid)
@@ -252,9 +274,43 @@ async def test_wait_database_attaches_public_ip_to_agent_database(app_env, monke
     out, err = await run(ctx(tw, uid), "timeweb_wait_database", database_id=777)
     data = json.loads(out)
     assert not err and data["ready"] and data["public_ip"] == "5.129.242.61"
-    assert data["public_ip_enabled_automatically"] is True
+    assert tw.db_patches == [{"is_enabled_public_network": True}] and tw.created_fips == []
+    assert data["privileges_regranted"] is True
+    assert tw.regrants == [{"privileges": T.REGRANT_PRIVILEGES["postgres"], "instance_id": 41}]
+
+
+async def test_wait_database_falls_back_to_floating_ip(app_env, monkeypatch):
+    monkeypatch.setattr(T, "WAIT_POLL_SECONDS", 0)
+    monkeypatch.setattr(T, "PUBLIC_IP_FALLBACK_SECONDS", 0)
+    uid = await _user()
+    await _agent_db(uid)
+    tw = IpFake(public_network_works=False)
+    data = json.loads((await run(ctx(tw, uid), "timeweb_wait_database", database_id=777))[0])
+    assert data["ready"] and data["public_ip"] == "5.129.242.62"
     assert tw.created_fips == [{"is_ddos_guard": False, "availability_zone": "msk-1"}]
     assert tw.binds == [{"resource_type": "database", "resource_id": 777}]
+
+
+async def test_regrant_retries_without_connect_if_rejected(app_env, monkeypatch):
+    monkeypatch.setattr(T, "WAIT_POLL_SECONDS", 0)
+    uid = await _user()
+    await _agent_db(uid)
+    tw = IpFake(connect_rejected=True)
+    data = json.loads((await run(ctx(tw, uid), "timeweb_wait_database", database_id=777))[0])
+    assert data["privileges_regranted"] is True and "CONNECT" not in tw.regrants[0]["privileges"]
+
+
+async def test_connect_always_prepares_database_first(app_env, monkeypatch):
+    """Даже если агент пропустил ожидание, подключение к приложению включает IP и выдаёт права."""
+    monkeypatch.setattr(T, "WAIT_POLL_SECONDS", 0)
+    uid = await _user()
+    await _agent_db(uid)
+    tw = IpFake()
+    tw.app_envs = {}
+    out, err = await run(ctx(tw, uid), "timeweb_connect_database", app_id="5", database_id=777, redeploy=False)
+    assert not err, out
+    assert tw.db_patches and tw.regrants
+    assert "5.129.242.61" in tw.patches[0]["envs"]["DATABASE_URL"]
 
 
 async def test_wait_database_does_not_pay_for_foreign_database(app_env, monkeypatch):
@@ -262,18 +318,34 @@ async def test_wait_database_does_not_pay_for_foreign_database(app_env, monkeypa
     uid = await _user()
     tw = IpFake()
     data = json.loads((await run(ctx(tw, uid), "timeweb_wait_database", database_id=777))[0])
-    assert not data["ready"] and "timeweb_enable_db_public_ip" in data["note"]
-    assert tw.created_fips == [] and tw.binds == []
+    assert not data["ready"] and "timeweb_fix_database_access" in data["note"]
+    assert tw.db_patches == [] and tw.created_fips == []
 
 
-async def test_enable_public_ip_needs_confirmation_and_does_not_duplicate(app_env):
+async def test_fix_access_needs_confirmation_only_for_foreign_db_and_no_duplicate_ip(app_env, monkeypatch):
+    monkeypatch.setattr(T, "WAIT_POLL_SECONDS", 0)
+    monkeypatch.setattr(T, "PUBLIC_IP_FALLBACK_SECONDS", 0)
     uid = await _user()
     tw = IpFake()
-    out, err = await run(ctx(tw, uid), "timeweb_enable_db_public_ip", database_id=777, confirmed=False)
-    assert err and not tw.binds
-    out, err = await run(ctx(tw, uid), "timeweb_enable_db_public_ip", database_id=777, confirmed=True)
-    assert not err and len(tw.binds) == 1
+    out, err = await run(ctx(tw, uid), "timeweb_fix_database_access", database_id=777)
+    assert err and not tw.db_patches
+    out, err = await run(ctx(tw, uid), "timeweb_fix_database_access", database_id=777, confirmed=True)
+    assert not err and json.loads(out)["ready"]
 
-    tw = IpFake(bound_already=True)  # IP уже привязан, но у базы ещё не виден — второй не создаём
-    out, err = await run(ctx(tw, uid), "timeweb_enable_db_public_ip", database_id=777, confirmed=True)
-    assert not err and tw.created_fips == [] and "привязывается" in out
+    # плавающий IP уже привязан, но у базы ещё не виден — второй не создаём
+    monkeypatch.setattr(T, "_wait_deadline", lambda _m: 0)
+    tw = IpFake(public_network_works=False, bound_already=True)
+    await run(ctx(tw, uid), "timeweb_fix_database_access", database_id=777, confirmed=True)
+    assert tw.created_fips == []
+
+
+async def test_wait_deploy_hints_at_privileges_bug(app_env, monkeypatch):
+    monkeypatch.setattr(T, "WAIT_POLL_SECONDS", 0)
+    tw = WaitFake(["failure"], [])
+
+    async def logs(app_id):
+        return ['psycopg.OperationalError: User does not have CONNECT privilege']
+
+    tw.app_logs = logs
+    data = json.loads((await run(ctx(tw, 1), "timeweb_wait_deploy", app_id="5", deploy_id="d2"))[0])
+    assert "timeweb_fix_database_access" in data["hint"]

@@ -49,7 +49,9 @@ The user connected their Timeweb Cloud account. You can deploy the repository as
   to reach the database, and get explicit confirmation). Never suggest SQLite or a DB
   inside the app container for production, and do not ask the user to create the DB manually.
 - Wait until the database is ready with `timeweb_wait_database` (it can take several minutes; one call waits on the
-  server and attaches the public IP — never poll with `bash sleep`).
+  server, enables the public IP and re-grants user privileges — never poll with `bash sleep`). An app must always
+  get a database with a public IP: if a database is running without one, or the app fails with "CONNECT privilege"
+  / "permission denied for database", call `timeweb_fix_database_access`.
 - Connect it: for a new app pass `database_id` to `timeweb_create_app`; for an existing app use
   `timeweb_connect_database`. Pick `mode`/`url_scheme` to match the code (e.g. SQLAlchemy async → postgresql+asyncpg).
 - You never see DB passwords; the server injects them. Do not print or commit connection strings.

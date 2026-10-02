@@ -154,7 +154,19 @@ class TimewebClient:
         body = await self.request("POST", "/api/v1/databases", json=payload)
         return body.get("db") or body.get("database") or body
 
-    # --- Плавающие IP: публичный адрес для управляемой базы выдаётся только так ---
+    async def update_database(self, cluster_id: int, payload: dict) -> dict:
+        return await self.request("PATCH", f"/api/v1/databases/{cluster_id}", json=payload)
+
+    async def list_db_admins(self, cluster_id: int) -> list[dict]:
+        return (await self.request("GET", f"/api/v1/databases/{cluster_id}/admins"))["admins"]
+
+    async def list_db_instances(self, cluster_id: int) -> list[dict]:
+        return (await self.request("GET", f"/api/v1/databases/{cluster_id}/instances"))["instances"]
+
+    async def update_db_admin(self, cluster_id: int, admin_id: int, payload: dict) -> dict:
+        return await self.request("PATCH", f"/api/v1/databases/{cluster_id}/admins/{admin_id}", json=payload)
+
+    # --- Плавающие IP: запасной способ выдать базе публичный адрес ---
     async def list_floating_ips(self) -> list[dict]:
         return (await self.request("GET", "/api/v1/floating-ips"))["ips"]
 

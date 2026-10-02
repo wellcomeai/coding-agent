@@ -47,7 +47,7 @@ MILESTONES = {
     "timeweb_create_database",
     "timeweb_wait_database",
     "timeweb_connect_database",
-    "timeweb_enable_db_public_ip",
+    "timeweb_fix_database_access",
     "timeweb_set_app_env",
 }
 
@@ -70,7 +70,7 @@ TOOL_LABELS = {
     "timeweb_create_database": "Создаю базу данных",
     "timeweb_wait_database": "Жду, пока база будет готова",
     "timeweb_connect_database": "Подключаю базу к приложению",
-    "timeweb_enable_db_public_ip": "Включаю базе публичный IP",
+    "timeweb_fix_database_access": "Включаю базе публичный IP и выдаю права",
 }
 
 _ids = count(1)
