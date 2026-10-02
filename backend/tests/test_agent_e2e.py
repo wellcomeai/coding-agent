@@ -150,3 +150,27 @@ async def test_events_stream_access(app_env):
         assert (await client.get("/api/sessions/nope/events")).status_code == 401
         client.cookies.set(SESSION_COOKIE, sign_session(user.id))
         assert (await client.get("/api/sessions/nope/events")).status_code == 404
+
+
+async def test_build_info_only_for_admin(app_env, monkeypatch):
+    from app import config
+    from app.main import create_app
+
+    monkeypatch.setenv("ADMIN_GITHUB_LOGINS", "boss")
+    monkeypatch.setenv("APP_VERSION", "abc1234")
+    config.get_settings.cache_clear()
+    async with session_factory()() as db:
+        boss = User(github_id=100, login="Boss", balance_micro=0)
+        other = User(github_id=101, login="other", balance_micro=0)
+        db.add_all([boss, other])
+        await db.commit()
+    transport = httpx.ASGITransport(app=create_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        assert "version" not in (await client.get("/api/health")).json()
+        client.cookies.set(SESSION_COOKIE, sign_session(boss.id))
+        me = (await client.get("/api/auth/me")).json()
+        assert me["is_admin"] and me["build"]["version"] == "abc1234"
+        client.cookies.set(SESSION_COOKIE, sign_session(other.id))
+        me = (await client.get("/api/auth/me")).json()
+        assert not me["is_admin"] and me["build"] is None
+    config.get_settings.cache_clear()

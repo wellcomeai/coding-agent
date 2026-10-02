@@ -9,6 +9,7 @@ export type Me = {
   install_url: string;
   models: string[];
   default_model: string;
+  build: { version: string; branch: string | null; repo: string; deployed_at: string } | null;
 };
 
 export type Repo = {

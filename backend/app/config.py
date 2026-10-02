@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     # --- Общие ---
     app_name: str = "Coding Agent"
     app_version: str = "dev"
+    app_branch: str = ""
+    app_repo: str = "wellcomeai/coding-agent"
     # Публичный адрес сервиса (без завершающего слэша), например https://agent.example.ru
     public_url: str = "http://localhost:8000"
     database_url: str = "sqlite+aiosqlite:///./data/app.db"

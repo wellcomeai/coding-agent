@@ -1,4 +1,5 @@
 import secrets
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -13,6 +14,8 @@ from ..models import User
 from ..security import SESSION_COOKIE, SESSION_MAX_AGE, encrypt, read_state, sign_session, sign_state
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+# Время запуска процесса = время последнего деплоя (при обновлении контейнер пересоздаётся)
+STARTED_AT = datetime.now(UTC)
 NONCE_COOKIE = "ca_oauth_nonce"
 
 
@@ -72,14 +75,23 @@ async def logout():
 @router.get("/me")
 async def me(user: User = Depends(current_user)):
     s = get_settings()
+    is_admin = user.login.lower() in s.admin_logins
     return {
+        "build": {
+            "version": s.app_version,
+            "branch": s.app_branch or None,
+            "repo": s.app_repo,
+            "deployed_at": STARTED_AT.isoformat(),
+        }
+        if is_admin
+        else None,
         "id": user.id,
         "login": user.login,
         "name": user.name,
         "avatar_url": user.avatar_url,
         "balance_rub": billing.micro_to_rub(user.balance_micro),
         "has_timeweb": bool(user.timeweb_token_enc),
-        "is_admin": user.login.lower() in s.admin_logins,
+        "is_admin": is_admin,
         "install_url": github_app.install_url(),
         "models": s.models,
         "default_model": s.default_model,

@@ -1,6 +1,7 @@
 import {
   ChevronsUpDown,
   CreditCard,
+  GitCommitHorizontal,
   LogOut,
   Monitor,
   Moon,
@@ -13,7 +14,7 @@ import {
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { useApp } from "../App";
-import { dateGroup, repoName, rub } from "../lib/format";
+import { dateGroup, relTime, repoName, rub } from "../lib/format";
 import { Logo, useOutside, useTheme } from "./ui";
 
 export default function Sidebar({ path, onClose }: { path: string; onClose: () => void }) {
@@ -144,6 +145,30 @@ export default function Sidebar({ path, onClose }: { path: string; onClose: () =
                   </button>
                 ))}
               </div>
+              {me.build && (
+                <>
+                  <div className="divider" />
+                  <a
+                    className="menu-item"
+                    href={`https://github.com/${me.build.repo}/commit/${me.build.version}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Версия сервиса (видно только администраторам)"
+                  >
+                    <GitCommitHorizontal size={16} />
+                    <span style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
+                      <span className="small">
+                        Версия <span className="mono">{me.build.version}</span> · {relTime(me.build.deployed_at)}
+                      </span>
+                      {me.build.branch && (
+                        <span className="mono small ellipsis" style={{ marginLeft: 0, color: "var(--text-3)" }}>
+                          {me.build.branch}
+                        </span>
+                      )}
+                    </span>
+                  </a>
+                </>
+              )}
               <div className="divider" />
               <form method="post" action="/api/auth/logout" style={{ margin: 0 }}>
                 <button className="menu-item">

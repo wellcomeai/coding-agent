@@ -50,7 +50,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     async def health():
-        return {"ok": True, "version": get_settings().app_version}
+        return {"ok": True}
 
     dist = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", s.frontend_dist))
     if os.path.isdir(dist):
