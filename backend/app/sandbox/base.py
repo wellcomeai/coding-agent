@@ -17,7 +17,11 @@ class Sandbox(ABC):
     repo_dir: str
 
     @abstractmethod
-    async def exec(self, command: str, timeout: int = 300, workdir: str | None = None) -> ExecResult: ...
+    async def exec(
+        self, command: str, timeout: int = 300, workdir: str | None = None, env: dict[str, str] | None = None
+    ) -> ExecResult:
+        """env — дополнительные переменные окружения только для этой команды."""
+        ...
 
     @abstractmethod
     async def read_file(self, path: str) -> bytes: ...

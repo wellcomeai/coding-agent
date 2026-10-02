@@ -38,6 +38,9 @@ class ToolContext:
     on_pr: Callable[[str], Awaitable[None]] | None = None
     # Токены, которые нужно вырезать из любого вывода
     secrets: list[str] = field(default_factory=list)
+    # Переменные окружения для команд агента в bash (например, TIMEWEB_TOKEN из Настроек).
+    # Значения попадают только в процесс команды, но не в контекст модели.
+    bash_env: dict[str, str] = field(default_factory=dict)
 
     async def gh_token(self) -> str:
         token = await github_app.installation_token(self.installation_id, self.repo)
@@ -76,8 +79,8 @@ def resolve(ctx: ToolContext, path: str | None) -> str:
     return p
 
 
-async def run(ctx: ToolContext, command: str, timeout: int | None = None) -> tuple[int, str]:
-    res = await ctx.sandbox.exec(command, timeout=timeout or get_settings().tool_timeout_seconds)
+async def run(ctx: ToolContext, command: str, timeout: int | None = None, env: dict | None = None) -> tuple[int, str]:
+    res = await ctx.sandbox.exec(command, timeout=timeout or get_settings().tool_timeout_seconds, env=env)
     out = scrub(res.output, ctx.secrets)
     if res.timed_out:
         out += f"\n[команда прервана по таймауту {timeout or get_settings().tool_timeout_seconds} c]"
@@ -89,7 +92,7 @@ async def run(ctx: ToolContext, command: str, timeout: int | None = None) -> tup
 
 async def t_bash(ctx: ToolContext, command: str, timeout: int = 120) -> str:
     timeout = max(1, min(int(timeout), get_settings().tool_timeout_seconds))
-    code, out = await run(ctx, command, timeout)
+    code, out = await run(ctx, command, timeout, ctx.bash_env)
     return truncate(f"{out}\n[exit code: {code}]" if code else out or "(пустой вывод)")
 
 

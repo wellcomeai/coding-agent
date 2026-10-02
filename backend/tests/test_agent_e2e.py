@@ -174,3 +174,51 @@ async def test_build_info_only_for_admin(app_env, monkeypatch):
         me = (await client.get("/api/auth/me")).json()
         assert not me["is_admin"] and me["build"] is None
     config.get_settings.cache_clear()
+
+
+async def test_timeweb_token_from_settings_reaches_bash_but_not_the_model(app_env, monkeypatch):
+    """Скрипты проекта (deploy_timeweb.py) получают ключ из Настроек как $TIMEWEB_TOKEN; модель его не видит."""
+    from app.main import create_app
+    from app.security import encrypt
+
+    token = "eyJ-test-timeweb-token-123"
+    user = await make_user()
+    async with session_factory()() as db:
+        u = await db.get(User, user.id)
+        u.timeweb_token_enc = encrypt(token)
+        await db.commit()
+    llm = ScriptedLLM(
+        [
+            ("", [call("c1", "bash", command='test -n "$TIMEWEB_TOKEN" && echo "len=${#TIMEWEB_TOKEN}"; echo "$TIMEWEB_TOKEN"')]),
+            ("", [call("c2", "read_file", path="README.md")]),
+            ("Готово.", []),
+        ]
+    )
+    set_llm(llm)
+
+    async def fake_repos(token_):
+        return [{"full_name": "owner/repo", "private": True, "default_branch": "main", "installation_id": 7,
+                 "permissions": {"push": True}}]
+
+    async def fake_user_token(db, user_):
+        return "ghu_user"
+
+    monkeypatch.setattr(github_app, "list_user_repos", fake_repos)
+    monkeypatch.setattr("app.routers.sessions.user_github_token", fake_user_token)
+    transport = httpx.ASGITransport(app=create_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set(SESSION_COOKIE, sign_session(user.id))
+        sid = (await client.post("/api/sessions", json={"repo_full_name": "owner/repo", "message": "Задеплой"})).json()["id"]
+        await runner.wait(sid)
+
+    seen = json.dumps(llm.seen, ensure_ascii=False)
+    assert f"len={len(token)}" in seen  # переменная задана в bash
+    assert token not in seen and "***" in seen  # а значение вырезано из вывода
+    assert "$TIMEWEB_TOKEN" in llm.seen[0][0]["content"]  # промпт объясняет, где ключ
+    async with session_factory()() as db:
+        events = (await db.execute(select(SessionEvent).where(SessionEvent.session_id == sid))).scalars().all()
+        assert token not in json.dumps([e.data for e in events], ensure_ascii=False)
+        sess = await db.get(AgentSession, sid)
+        assert token not in sess.history_json
+    set_llm(None)
+    await runner.release_sandbox(sess, autosave=False)

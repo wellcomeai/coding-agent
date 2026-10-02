@@ -16,6 +16,7 @@ from ..models import AgentSession, User
 from ..sandbox import Sandbox, get_provider
 from ..security import decrypt
 from ..timeweb import TimewebClient
+from . import persist
 from . import tools as T
 from .llm import get_llm
 from .narrator import Narrator
@@ -111,6 +112,10 @@ class AgentRunner:
             except Exception:
                 await sb.destroy()
                 raise
+            try:
+                await persist.restore(sb, user.id)
+            except Exception:  # noqa: BLE001 — без сохранённого состояния агент всё равно может работать
+                log.warning("Не удалось восстановить состояние песочницы сессии %s", sess.id, exc_info=True)
             async with session_factory()() as db:
                 await db.execute(update(AgentSession).where(AgentSession.id == sess.id).values(sandbox_id=sb.id))
                 await db.commit()
@@ -144,6 +149,8 @@ class AgentRunner:
         history: list[dict] = []
         sess: AgentSession | None = None
         narrator: Narrator | None = None
+        sandbox: Sandbox | None = None
+        user_id = 0
         try:
             async with session_factory()() as db:
                 sess = await db.get(AgentSession, session_id)
@@ -163,6 +170,7 @@ class AgentRunner:
             history.append({"role": "user", "content": text})
             await self._save_history(session_id, history)
 
+            user_id = user.id
             sandbox = await self.ensure_sandbox(sess, user)
             tw_token = decrypt(user.timeweb_token_enc)
 
@@ -183,6 +191,8 @@ class AgentRunner:
                 pr_url=sess.pr_url,
                 on_pr=on_pr,
                 secrets=[tw_token] if tw_token else [],
+                # Ключ из Настроек доступен скриптам проекта (например, deploy_timeweb.py) как $TIMEWEB_TOKEN
+                bash_env={"TIMEWEB_TOKEN": tw_token} if tw_token else {},
             )
             specs, registry = T.toolset(with_timeweb=bool(tw_token))
             system = build_system_prompt(
@@ -273,9 +283,11 @@ class AgentRunner:
                     session_id, "error", {"message": f"Достигнут лимит шагов ({s.agent_max_steps}). Напишите «продолжай»."}
                 )
             await self._close_narrator(narrator)
+            await self._persist(sandbox, user_id)
             await self._finish(session_id, "idle")
         except asyncio.CancelledError:
             await asyncio.shield(self._close_narrator(narrator))
+            await asyncio.shield(self._persist(sandbox, user_id))
             close_dangling_tool_calls(history)
             history.append({"role": "user", "content": "[Пользователь остановил выполнение]"})
             await asyncio.shield(self._save_history(session_id, history))
@@ -285,11 +297,22 @@ class AgentRunner:
         except Exception as e:  # noqa: BLE001
             log.exception("Ошибка в сессии %s", session_id)
             await self._close_narrator(narrator)
+            await self._persist(sandbox, user_id)
             close_dangling_tool_calls(history)
             if history:
                 await self._save_history(session_id, history)
             await bus.publish(session_id, "error", {"message": f"Ошибка: {e}"[:2000]})
             await self._finish(session_id, "error")
+
+    @staticmethod
+    async def _persist(sandbox: Sandbox | None, user_id: int) -> None:
+        """Сохранить файлы скриптов из $HOME: песочница удалится после простоя, а они нужны и дальше."""
+        if not sandbox or not user_id:
+            return
+        try:
+            await persist.save(sandbox, user_id)
+        except Exception:  # noqa: BLE001
+            log.warning("Не удалось сохранить состояние песочницы пользователя %s", user_id, exc_info=True)
 
     @staticmethod
     async def _close_narrator(narrator: Narrator | None) -> None:

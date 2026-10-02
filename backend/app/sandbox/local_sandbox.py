@@ -16,7 +16,9 @@ class LocalSandbox(Sandbox):
         self.id = "local:" + self.root
         self.repo_dir = os.path.join(self.root, "repo")
 
-    async def exec(self, command: str, timeout: int = 300, workdir: str | None = None) -> ExecResult:
+    async def exec(
+        self, command: str, timeout: int = 300, workdir: str | None = None, env: dict[str, str] | None = None
+    ) -> ExecResult:
         cwd = workdir or (self.repo_dir if os.path.isdir(self.repo_dir) else self.root)
         proc = await asyncio.create_subprocess_exec(
             "bash",
@@ -26,7 +28,7 @@ class LocalSandbox(Sandbox):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             start_new_session=True,
-            env={**os.environ, "HOME": self.root, "GIT_TERMINAL_PROMPT": "0"},
+            env={**os.environ, "HOME": self.root, "GIT_TERMINAL_PROMPT": "0", **(env or {})},
         )
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)

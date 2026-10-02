@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     sandbox_pids_limit: int = 512
     sandbox_network: str = "bridge"
     sandbox_idle_minutes: int = 30
+    # Каталоги в $HOME песочницы, которые сохраняются между сессиями пользователя (через запятую).
+    # .opensaas-timeweb — состояние deploy_timeweb.py (пароли базы и админа, нужны для set-env/test-email).
+    sandbox_persist_dirs: str = ".agent-state,.opensaas-timeweb"
     sandbox_local_root: str = "./data/sandboxes"
     tool_timeout_seconds: int = 300
     tool_output_limit: int = 30000

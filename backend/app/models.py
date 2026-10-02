@@ -115,3 +115,14 @@ class TimewebDatabase(Base):
     login: Mapped[str] = mapped_column(String(100))
     password_enc: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SandboxState(Base):
+    """Файлы из домашнего каталога песочницы, которые переживают её удаление (например, состояние
+    deploy_timeweb.py с паролями базы и админа). Хранятся зашифрованными: {путь: base64} в JSON."""
+
+    __tablename__ = "sandbox_states"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    files_enc: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

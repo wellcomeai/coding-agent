@@ -24,13 +24,19 @@ class DockerSandbox(Sandbox):
         self.id = container.id
         self.repo_dir = f"{WORKSPACE}/repo"
 
-    async def exec(self, command: str, timeout: int = 300, workdir: str | None = None) -> ExecResult:
+    async def exec(
+        self, command: str, timeout: int = 300, workdir: str | None = None, env: dict[str, str] | None = None
+    ) -> ExecResult:
         # coreutils timeout убивает процесс по истечении времени; -k добивает через 5 сек.
         wrapped = f"timeout -k 5 {int(timeout)} bash -lc {shlex.quote(command)}"
 
         def run():
             return self._c.exec_run(
-                ["bash", "-c", wrapped], workdir=workdir or self.repo_dir, user=str(SANDBOX_UID), demux=False
+                ["bash", "-c", wrapped],
+                workdir=workdir or self.repo_dir,
+                user=str(SANDBOX_UID),
+                demux=False,
+                environment=env or None,
             )
 
         res = await asyncio.to_thread(run)
