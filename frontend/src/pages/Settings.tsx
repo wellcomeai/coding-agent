@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, ExternalLink, KeyRound, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Database, ExternalLink, Eye, KeyRound, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { useApp } from "../App";
@@ -86,6 +86,107 @@ function TimewebStatus({ refreshKey }: { refreshKey: number }) {
           </div>
         ))
       )}
+    </div>
+  );
+}
+
+type DbItem = {
+  id: number;
+  name: string;
+  type: string;
+  db_name: string;
+  user: string;
+  status: string | null;
+  host: string | null;
+  port: number | null;
+};
+
+const DB_STATUS: Record<string, [string, string]> = {
+  started: ["Работает", "success"],
+  creating: ["Создаётся", "accent"],
+  starting: ["Запускается", "accent"],
+  stopped: ["Остановлена", ""],
+  deleted: ["Удалена", "danger"],
+};
+
+function Databases() {
+  const toast = useToast();
+  const [items, setItems] = useState<DbItem[] | null>(null);
+  const [shown, setShown] = useState<Record<number, any>>({});
+  const load = useCallback(() => api<{ databases: DbItem[] }>("/api/timeweb/databases").then((r) => setItems(r.databases)), []);
+  useEffect(() => {
+    load().catch(() => setItems([]));
+  }, [load]);
+
+  async function conn(id: number) {
+    return api<any>(`/api/timeweb/databases/${id}/connection`, { method: "POST" });
+  }
+  async function copy(id: number) {
+    try {
+      const c = await conn(id);
+      await navigator.clipboard.writeText(c.url);
+      toast("success", "Строка подключения скопирована");
+    } catch (e: any) {
+      toast("error", e.message);
+    }
+  }
+  async function reveal(id: number) {
+    if (shown[id]) return setShown((s) => ({ ...s, [id]: undefined }));
+    try {
+      const c = await conn(id);
+      setShown((s) => ({ ...s, [id]: c }));
+    } catch (e: any) {
+      toast("error", e.message);
+    }
+  }
+
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="card">
+      <div className="card-head">
+        <div className="integration" style={{ flex: 1 }}>
+          <span className="mark">
+            <Database size={19} />
+          </span>
+          <div>
+            <h3>Базы данных</h3>
+            <p className="muted small">Созданы агентом в вашем аккаунте Timeweb. Пароли знает только сервис.</p>
+          </div>
+        </div>
+        <button className="btn ghost sm" onClick={() => load()}>
+          <RefreshCw size={13} /> Обновить
+        </button>
+      </div>
+      <div className="card-pad stack" style={{ gap: 12 }}>
+        {items.map((d) => {
+          const [label, cls] = DB_STATUS[d.status || ""] || [d.status || "—", ""];
+          const c = shown[d.id];
+          return (
+            <div key={d.id} className="db-item">
+              <div className="row wrap">
+                <b>{d.name}</b>
+                <span className="muted small mono">
+                  {d.type} · {d.db_name}
+                  {d.host ? ` · ${d.host}:${d.port}` : ""}
+                </span>
+                <span className={"badge " + cls}>{label}</span>
+                <div className="spacer" />
+                <button className="btn sm" onClick={() => copy(d.id)} disabled={d.status !== "started"}>
+                  <Copy size={13} /> Скопировать URL
+                </button>
+                <button className="btn ghost sm" onClick={() => reveal(d.id)} disabled={d.status !== "started"}>
+                  <Eye size={13} /> {c ? "Скрыть" : "Параметры"}
+                </button>
+              </div>
+              {c && (
+                <pre className="codebox" style={{ marginTop: 10 }}>
+                  {`DB_HOST=${c.host}\nDB_PORT=${c.port}\nDB_NAME=${c.name}\nDB_USER=${c.user}\nDB_PASSWORD=${c.password}\n\nDATABASE_URL=${c.url}`}
+                </pre>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -209,6 +310,8 @@ export default function Settings() {
             </div>
           </div>
         </div>
+
+        {me.has_timeweb && <Databases />}
 
         <div className="card">
           <div className="card-head">

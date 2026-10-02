@@ -1247,3 +1247,9 @@ a.step:hover {
   background: var(--surface-2);
   font-size: 13.5px;
 }
+
+.db-item {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}

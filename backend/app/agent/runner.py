@@ -171,6 +171,7 @@ class AgentRunner:
                 base_branch=sess.base_branch,
                 work_branch=sess.work_branch,
                 timeweb=TimewebClient(tw_token) if tw_token else None,
+                user_id=user.id,
                 pr_url=sess.pr_url,
                 on_pr=on_pr,
                 secrets=[tw_token] if tw_token else [],

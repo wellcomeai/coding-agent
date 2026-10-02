@@ -3,13 +3,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import billing
+from .. import billing, timeweb_db
 from ..config import get_settings
 from ..db import get_db
 from ..deps import admin_user, current_user
 from ..models import LedgerEntry, User
 from ..security import decrypt, encrypt
-from ..timeweb import TimewebClient, TimewebError
+from ..timeweb import TimewebClient, TimewebError, db_public_ip
 
 router = APIRouter(prefix="/api", tags=["account"])
 
@@ -44,7 +44,7 @@ async def timeweb_status(user: User = Depends(current_user)):
     out: dict = {"connected": True, "valid": True, "account": account.get("login"), "providers": []}
     try:
         for p in await client.list_providers():
-            item = {"login": p.get("login"), "type": str(p.get("provider_type") or "").lower(), "repos_count": None}
+            item = {"login": p.get("login"), "type": str(p.get("provider_type") or p.get("provider") or "").lower(), "repos_count": None}
             try:
                 item["repos_count"] = len(await client.list_provider_repos(p["provider_id"]))
             except TimewebError as e:
@@ -53,6 +53,42 @@ async def timeweb_status(user: User = Depends(current_user)):
     except TimewebError as e:
         out["providers_error"] = f"Не удалось получить подключённые аккаунты GitHub: {e}"
     return out
+
+
+@router.get("/timeweb/databases")
+async def my_databases(user: User = Depends(current_user)):
+    """Базы, созданные агентом, с актуальным статусом из Timeweb."""
+    records = await timeweb_db.list_records(user.id)
+    token = decrypt(user.timeweb_token_enc)
+    client = TimewebClient(token) if token else None
+    out = []
+    for r in records:
+        item = {"id": r.cluster_id, "name": r.name, "type": r.db_type, "db_name": r.db_name, "user": r.login,
+                "created_at": r.created_at.isoformat(), "status": None, "host": None, "port": None}
+        if client:
+            try:
+                live = await client.get_database(r.cluster_id)
+                item.update(status=live.get("status"), host=db_public_ip(live), port=live.get("port"))
+            except TimewebError as e:
+                item["status"] = "deleted" if e.status == 404 else f"ошибка {e.status}"
+        out.append(item)
+    return {"databases": out}
+
+
+@router.post("/timeweb/databases/{cluster_id}/connection")
+async def database_connection(cluster_id: int, user: User = Depends(current_user)):
+    """Параметры подключения (с паролем) — только владельцу, по явному запросу из интерфейса."""
+    rec = await timeweb_db.get_record(user.id, cluster_id)
+    token = decrypt(user.timeweb_token_enc)
+    if not rec or not token:
+        raise HTTPException(404, "База не найдена")
+    try:
+        live = await TimewebClient(token).get_database(cluster_id)
+        return timeweb_db.connection(rec, live)
+    except timeweb_db.NotReady as e:
+        raise HTTPException(409, str(e)) from e
+    except TimewebError as e:
+        raise HTTPException(502, str(e)) from e
 
 
 @router.delete("/settings/timeweb")

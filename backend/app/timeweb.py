@@ -113,7 +113,7 @@ class TimewebClient:
             info = {
                 "provider_id": p.get("provider_id"),
                 "login": p.get("login"),
-                "type": str(p.get("provider_type") or "").lower(),
+                "type": str(p.get("provider_type") or p.get("provider") or "").lower(),
                 "repos_count": 0,
                 "sample": [],
             }
@@ -135,6 +135,24 @@ class TimewebClient:
     async def find_repository(self, full_name: str) -> tuple[str, dict] | None:
         """Найти репозиторий GitHub среди подключённых к аккаунту Timeweb провайдеров."""
         return (await self.diagnose_repository(full_name)).match
+
+    # --- Базы данных ---
+    async def db_types(self) -> list[dict]:
+        return (await self.request("GET", "/api/v1/database-types"))["types"]
+
+    async def db_presets(self) -> list[dict]:
+        return (await self.request("GET", "/api/v2/presets/dbs"))["databases_presets"]
+
+    async def list_databases(self) -> list[dict]:
+        return (await self.request("GET", "/api/v1/databases"))["dbs"]
+
+    async def get_database(self, cluster_id: int) -> dict:
+        body = await self.request("GET", f"/api/v1/databases/{cluster_id}")
+        return body.get("db") or body.get("database") or body
+
+    async def create_database(self, payload: dict) -> dict:
+        body = await self.request("POST", "/api/v1/databases", json=payload)
+        return body.get("db") or body.get("database") or body
 
     # --- Cloud AI (прайс) ---
     async def ai_models(self) -> list[dict]:
@@ -190,3 +208,26 @@ class RepoLookup:
             "https://github.com/settings/installations → Timeweb → Configure."
         )
         return "\n".join(lines)
+
+
+HIDDEN_ENV = "hidden-by-api-key-policy"
+
+
+def db_public_ip(db: dict) -> str | None:
+    for net in db.get("networks") or []:
+        if net.get("type") == "public":
+            for ip in net.get("ips") or []:
+                if ip.get("type") in ("ipv_4", "ipv4") and ip.get("ip"):
+                    return ip["ip"]
+    return None
+
+
+def db_family(db_type: str) -> str:
+    t = (db_type or "").lower()
+    for fam in ("postgres", "mysql", "redis", "valkey", "mongodb", "clickhouse", "opensearch", "kafka", "rabbitmq"):
+        if t.startswith(fam):
+            return fam
+    return t
+
+
+SCHEMES = {"postgres": "postgresql", "mysql": "mysql", "redis": "redis", "valkey": "redis", "mongodb": "mongodb"}

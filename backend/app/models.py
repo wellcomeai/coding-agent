@@ -99,3 +99,19 @@ class Payment(Base):
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TimewebDatabase(Base):
+    """Управляемая БД Timeweb, созданная агентом. Пароль известен только серверу (зашифрован)."""
+
+    __tablename__ = "timeweb_databases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    cluster_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    db_type: Mapped[str] = mapped_column(String(50))
+    db_name: Mapped[str] = mapped_column(String(255))
+    login: Mapped[str] = mapped_column(String(100))
+    password_enc: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

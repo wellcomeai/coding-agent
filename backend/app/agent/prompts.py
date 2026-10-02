@@ -33,6 +33,15 @@ The user connected their Timeweb Cloud account. You can deploy the repository as
 - Creating an app costs the user money: ALWAYS show the chosen preset with its price and get explicit confirmation
   from the user in chat before calling `timeweb_create_app` (pass confirmed=true only after the user agreed).
 - After deploying, poll status/logs (`timeweb_app_status`, `timeweb_deploy_logs`) and fix build errors yourself.
+
+### Databases
+- If the app needs a database, create a managed one with `timeweb_create_database` (PAID — show tariff and price
+  from `timeweb_db_options`, same location as the app, and get explicit confirmation). Never suggest SQLite or a DB
+  inside the app container for production, and do not ask the user to create the DB manually.
+- Wait until `timeweb_database_status` reports ready (it can take several minutes; poll with pauses via `bash sleep 30`).
+- Connect it: for a new app pass `database_id` to `timeweb_create_app`; for an existing app use
+  `timeweb_connect_database`. Pick `mode`/`url_scheme` to match the code (e.g. SQLAlchemy async → postgresql+asyncpg).
+- You never see DB passwords; the server injects them. Do not print or commit connection strings.
 """
 
 TIMEWEB_DISABLED = """

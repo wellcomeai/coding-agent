@@ -55,18 +55,35 @@ class PriceBook:
         self._prices = {_norm(k): v for k, v in prices.items()}
         self._loaded_at = time.time()
 
-    async def refresh(self) -> None:
+    async def _candidate_tokens(self) -> list[str]:
+        """Токен из ENV, затем токены Timeweb, сохранённые администраторами в Настройках."""
+        from .db import session_factory
+        from .security import decrypt
+
         s = get_settings()
-        if not s.timeweb_api_token:
-            return
+        tokens = [s.timeweb_api_token] if s.timeweb_api_token else []
+        if s.admin_logins:
+            async with session_factory()() as db:
+                rows = (await db.execute(select(User.login, User.timeweb_token_enc))).all()
+            for login, enc in rows:
+                token = decrypt(enc) if login.lower() in s.admin_logins else None
+                if token and token not in tokens:
+                    tokens.append(token)
+        return tokens
+
+    async def refresh(self) -> None:
         async with self._lock:
-            if time.time() - self._loaded_at < self.TTL and self._prices:
+            if time.time() - self._loaded_at < (self.TTL if self._prices else 300):
                 return
-            try:
-                models = await TimewebClient(s.timeweb_api_token).ai_models()
-            except Exception as e:  # noqa: BLE001
-                log.warning("Не удалось загрузить прайс Timeweb: %s", e)
-                self._loaded_at = time.time() - self.TTL + 300  # повторим через 5 минут
+            self._loaded_at = time.time()
+            models = None
+            for token in await self._candidate_tokens():
+                try:
+                    models = await TimewebClient(token).ai_models()
+                    break
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Не удалось загрузить прайс Timeweb этим токеном: %s", e)
+            if models is None:
                 return
             prices = {}
             for m in models:

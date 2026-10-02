@@ -13,7 +13,8 @@ from typing import Any
 from .. import github_app
 from ..config import get_settings
 from ..sandbox import Sandbox
-from ..timeweb import TimewebClient, TimewebError
+from .. import timeweb_db
+from ..timeweb import HIDDEN_ENV, TimewebClient, TimewebError, db_family, db_public_ip
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class ToolContext:
     base_branch: str
     work_branch: str
     timeweb: TimewebClient | None
+    user_id: int = 0
     pr_url: str | None = None
     on_pr: Callable[[str], Awaitable[None]] | None = None
     # Токены, которые нужно вырезать из любого вывода
@@ -295,6 +297,10 @@ async def t_timeweb_create_app(
     envs: dict | None = None,
     branch: str | None = None,
     is_auto_deploy: bool = True,
+    database_id: int | None = None,
+    database_mode: str = "url",
+    database_env_name: str = "DATABASE_URL",
+    database_url_scheme: str | None = None,
 ) -> str:
     if not confirmed:
         raise ToolError("Создание приложения платное. Сначала получите явное согласие пользователя в чате.")
@@ -316,8 +322,12 @@ async def t_timeweb_create_app(
         "commit_sha": await _sha(ctx, branch),
         "build_cmd": build_cmd,
         "is_auto_deploy": is_auto_deploy,
-        "envs": envs or {},
+        "envs": {str(k): str(v) for k, v in (envs or {}).items()},
     }
+    if database_id:
+        payload["envs"].update(
+            await _db_envs(ctx, int(database_id), database_mode, database_env_name, "DB_", database_url_scheme)
+        )
     if app_type == "backend":
         if not run_cmd:
             raise ToolError("Для backend-приложения нужен run_cmd")
@@ -336,8 +346,16 @@ async def t_timeweb_create_app(
 async def t_timeweb_deploy(ctx: ToolContext, app_id: str, branch: str | None = None) -> str:
     tw = _tw(ctx)
     app = await tw.get_app(str(app_id))
-    branch = branch or app.get("branch_name") or ctx.work_branch
-    d = await tw.deploy(str(app_id), await _sha(ctx, branch))
+    branch = branch or app.get("branch_name")
+    if branch:
+        sha = await _sha(ctx, branch)
+    else:
+        # Ветка у приложения не указана — пересобираем последний задеплоенный коммит
+        deploys = await tw.list_deploys(str(app_id), 1)
+        sha = deploys[0].get("commit_sha") if deploys else None
+        if not sha:
+            sha = await _sha(ctx, ctx.work_branch)
+    d = await tw.deploy(str(app_id), sha)
     return json.dumps({"deploy_id": d.get("id"), "status": d.get("status"), "commit": d.get("commit_sha")})
 
 
@@ -370,6 +388,161 @@ async def t_timeweb_deploy_logs(ctx: ToolContext, app_id: str, deploy_id: str | 
 async def t_timeweb_app_logs(ctx: ToolContext, app_id: str) -> str:
     logs = await _tw(ctx).app_logs(str(app_id))
     return truncate("\n".join(logs[-200:]) or "Логи пусты", 15000)
+
+
+# ---------------- Timeweb: базы данных ----------------
+
+
+async def _update_app_envs(ctx: ToolContext, app_id: str, new_envs: dict[str, str]) -> list[str]:
+    """Безопасно добавить/изменить переменные приложения. Возвращает список изменённых ключей.
+
+    Timeweb скрывает значения переменных (hidden-by-api-key-policy). Если они скрыты, мы не можем
+    переслать их обратно без потери секретов — тогда ничего не меняем и объясняем, что делать.
+    """
+    tw = _tw(ctx)
+    app = await tw.get_app(str(app_id))
+    current = app.get("envs") or {}
+    hidden = [k for k, v in current.items() if v == HIDDEN_ENV and k not in new_envs]
+    if hidden:
+        raise ToolError(
+            "Не меняю переменные: Timeweb скрывает их значения для этого API-ключа "
+            f"({', '.join(hidden[:8])}{'…' if len(hidden) > 8 else ''}), и при перезаписи они бы потерялись. "
+            "Варианты: (1) пользователь добавляет переменную вручную в панели Timeweb: Apps → приложение → "
+            "Переменные (строку подключения к БД можно скопировать в Настройках сервиса → Базы данных); "
+            "(2) создать новое приложение через timeweb_create_app с параметром database_id — переменные "
+            "задаются при создании."
+        )
+    merged = {**{k: str(v) for k, v in current.items()}, **{k: str(v) for k, v in new_envs.items()}}
+    await tw.update_app(str(app_id), {"envs": merged})
+    after = (await tw.get_app(str(app_id))).get("envs") or {}
+    missing = [k for k in merged if k not in after]
+    if missing:
+        raise ToolError(f"Timeweb не сохранил переменные: {', '.join(missing)}. Проверьте приложение в панели.")
+    return list(new_envs)
+
+
+def _short_db(d: dict, managed: bool) -> dict:
+    return {
+        "id": d.get("id"),
+        "name": d.get("name"),
+        "type": d.get("type"),
+        "status": d.get("status"),
+        "location": d.get("location"),
+        "public_ip": db_public_ip(d),
+        "port": d.get("port"),
+        "created_by_agent": managed,
+    }
+
+
+async def t_timeweb_db_options(ctx: ToolContext, db_family_name: str = "postgres", location: str | None = None) -> str:
+    tw = _tw(ctx)
+    fam = db_family_name.lower()
+    types = [
+        {"type": t.get("type"), "version": t.get("version")}
+        for t in await tw.db_types()
+        if db_family(t.get("type", "")) == fam and not t.get("is_deprecated")
+    ]
+    presets = [
+        {k: p.get(k) for k in ("id", "description_short", "price", "cpu", "ram", "disk", "location")}
+        for p in await tw.db_presets()
+        if db_family(p.get("type", "")) == fam and (not location or p.get("location") == location)
+    ]
+    presets.sort(key=lambda p: (p.get("location") or "", p.get("price") or 0))
+    return truncate(
+        json.dumps({"types": types, "presets (price — руб./мес.)": presets[:40]}, ensure_ascii=False), 15000
+    )
+
+
+async def t_timeweb_list_databases(ctx: ToolContext) -> str:
+    tw = _tw(ctx)
+    managed = {r.cluster_id for r in await timeweb_db.list_records(ctx.user_id)}
+    dbs = await tw.list_databases()
+    if not dbs:
+        return "Баз данных нет"
+    return json.dumps([_short_db(d, d.get("id") in managed) for d in dbs], ensure_ascii=False)
+
+
+async def t_timeweb_create_database(
+    ctx: ToolContext, name: str, db_type: str, preset_id: int, confirmed: bool, db_name: str = "app"
+) -> str:
+    if not confirmed:
+        raise ToolError("Создание базы данных платное. Сначала покажите тариф с ценой и получите согласие пользователя.")
+    tw = _tw(ctx)
+    login = timeweb_db.generate_login()
+    password = timeweb_db.generate_password()
+    ctx.secrets.append(password)
+    try:
+        created = await tw.create_database(timeweb_db.create_payload(name, db_type, preset_id, db_name, login, password))
+    except TimewebError as e:
+        raise ToolError(f"Timeweb не создал базу: {e}") from e
+    cluster_id = created.get("id")
+    if not cluster_id:
+        raise ToolError(f"Timeweb не вернул ID базы: {truncate(json.dumps(created, ensure_ascii=False), 1000)}")
+    await timeweb_db.save(ctx.user_id, cluster_id, name, db_type, db_name, login, password)
+    return (
+        f"База создаётся: id={cluster_id}, тип {db_type}, база «{db_name}», пользователь {login}. "
+        "Пароль сгенерирован и сохранён на сервере (вам он не нужен). Дождитесь статуса started через "
+        "timeweb_database_status, затем подключите к приложению: timeweb_connect_database или "
+        "timeweb_create_app с database_id."
+    )
+
+
+async def t_timeweb_database_status(ctx: ToolContext, database_id: int) -> str:
+    tw = _tw(ctx)
+    d = await tw.get_database(int(database_id))
+    rec = await timeweb_db.get_record(ctx.user_id, int(database_id))
+    info = _short_db(d, rec is not None)
+    info["ready"] = d.get("status") == "started" and bool(info["public_ip"])
+    if not rec:
+        info["note"] = (
+            "База создана не через агента — пароль неизвестен. Подключить её автоматически нельзя: "
+            "пользователь может добавить строку подключения вручную в панели Timeweb."
+        )
+    return json.dumps(info, ensure_ascii=False)
+
+
+async def _db_envs(ctx: ToolContext, database_id: int, mode: str, env_name: str, prefix: str, url_scheme: str | None):
+    rec = await timeweb_db.get_record(ctx.user_id, int(database_id))
+    if not rec:
+        raise ToolError(
+            "Эта база создана не через агента, её пароль неизвестен. Создайте базу через timeweb_create_database "
+            "или попросите пользователя добавить переменные подключения вручную в панели Timeweb."
+        )
+    live = await _tw(ctx).get_database(int(database_id))
+    try:
+        conn = timeweb_db.connection(rec, live, url_scheme)
+    except timeweb_db.NotReady as e:
+        raise ToolError(str(e)) from e
+    ctx.secrets.append(conn["password"])
+    return timeweb_db.envs_for(conn, mode, env_name, prefix)
+
+
+async def t_timeweb_connect_database(
+    ctx: ToolContext,
+    app_id: str,
+    database_id: int,
+    mode: str = "url",
+    env_name: str = "DATABASE_URL",
+    prefix: str = "DB_",
+    url_scheme: str | None = None,
+    redeploy: bool = True,
+) -> str:
+    envs = await _db_envs(ctx, database_id, mode, env_name, prefix, url_scheme)
+    keys = await _update_app_envs(ctx, app_id, envs)
+    msg = f"База {database_id} подключена к приложению {app_id}: заданы переменные {', '.join(keys)} (значения скрыты)."
+    if redeploy:
+        msg += "\n" + await t_timeweb_deploy(ctx, app_id)
+    return msg
+
+
+async def t_timeweb_set_app_env(ctx: ToolContext, app_id: str, envs: dict, redeploy: bool = True) -> str:
+    if not isinstance(envs, dict) or not envs:
+        raise ToolError("envs — объект {ИМЯ: значение}")
+    keys = await _update_app_envs(ctx, app_id, {str(k): str(v) for k, v in envs.items()})
+    msg = f"Переменные обновлены: {', '.join(keys)}."
+    if redeploy:
+        msg += "\n" + await t_timeweb_deploy(ctx, app_id)
+    return msg
 
 
 # ---------------- описание для LLM ----------------
@@ -481,6 +654,10 @@ TIMEWEB_TOOLS: list[tuple[dict, Callable]] = [
                 "envs": {"type": "object", "description": "environment variables"},
                 "branch": {**S, "description": "branch to deploy, default: working branch"},
                 "is_auto_deploy": B,
+                "database_id": {**I, "description": "optional: id from timeweb_create_database to inject DB connection envs"},
+                "database_mode": {"type": "string", "enum": ["url", "parts"]},
+                "database_env_name": {**S, "description": "default DATABASE_URL"},
+                "database_url_scheme": {**S, "description": "e.g. postgresql+asyncpg"},
                 "confirmed": {**B, "description": "true only if the user explicitly approved the paid preset"},
             },
             ["name", "app_type", "framework", "preset_id", "build_cmd", "confirmed"],
@@ -497,6 +674,71 @@ TIMEWEB_TOOLS: list[tuple[dict, Callable]] = [
         t_timeweb_deploy_logs,
     ),
     (_fn("timeweb_app_logs", "Get runtime logs of the app.", {"app_id": S}, ["app_id"]), t_timeweb_app_logs),
+    (
+        _fn(
+            "timeweb_db_options",
+            "List managed database types (versions) and tariffs with monthly price in RUB.",
+            {
+                "db_family_name": {"type": "string", "enum": ["postgres", "mysql", "valkey", "mongodb", "clickhouse"]},
+                "location": {**S, "description": "e.g. ru-1, ru-3 — pick the same location as the app"},
+            },
+        ),
+        t_timeweb_db_options,
+    ),
+    (_fn("timeweb_list_databases", "List the user's managed databases in Timeweb.", {}), t_timeweb_list_databases),
+    (
+        _fn(
+            "timeweb_create_database",
+            "Create a managed database (cluster + database + user). Credentials are generated and stored by the "
+            "server; you never see the password. PAID: requires explicit user confirmation.",
+            {
+                "name": {**S, "description": "cluster name, e.g. myapp-db"},
+                "db_type": {**S, "description": "exact type from timeweb_db_options, e.g. postgres16"},
+                "preset_id": I,
+                "db_name": {**S, "description": "database name, default 'app'"},
+                "confirmed": {**B, "description": "true only if the user explicitly approved the paid tariff"},
+            },
+            ["name", "db_type", "preset_id", "confirmed"],
+        ),
+        t_timeweb_create_database,
+    ),
+    (
+        _fn(
+            "timeweb_database_status",
+            "Get database status, public IP and whether it is ready to connect.",
+            {"database_id": I},
+            ["database_id"],
+        ),
+        t_timeweb_database_status,
+    ),
+    (
+        _fn(
+            "timeweb_connect_database",
+            "Put connection settings of a database created by timeweb_create_database into an existing app's "
+            "environment variables (server inserts the password) and redeploy.",
+            {
+                "app_id": S,
+                "database_id": I,
+                "mode": {"type": "string", "enum": ["url", "parts"], "description": "url → one DATABASE_URL; parts → DB_HOST/PORT/NAME/USER/PASSWORD"},
+                "env_name": {**S, "description": "variable name for mode=url, default DATABASE_URL"},
+                "prefix": {**S, "description": "prefix for mode=parts, default DB_"},
+                "url_scheme": {**S, "description": "override URL scheme to match the code, e.g. postgresql+asyncpg, postgresql+psycopg, mysql+pymysql"},
+                "redeploy": B,
+            },
+            ["app_id", "database_id"],
+        ),
+        t_timeweb_connect_database,
+    ),
+    (
+        _fn(
+            "timeweb_set_app_env",
+            "Add or change environment variables of an existing app (keeps others) and redeploy. Never put secrets "
+            "you invented into the chat; for DB credentials use timeweb_connect_database.",
+            {"app_id": S, "envs": {"type": "object"}, "redeploy": B},
+            ["app_id", "envs"],
+        ),
+        t_timeweb_set_app_env,
+    ),
 ]
 
 
