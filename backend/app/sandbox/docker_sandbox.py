@@ -89,6 +89,11 @@ class DockerSandboxProvider(SandboxProvider):
         s = get_settings()
 
         def run():
+            # Остановленный контейнер прошлой песочницы этой сессии (например, после перезагрузки хоста)
+            try:
+                self._client.containers.get(f"agent-{session_id}").remove(force=True)
+            except NotFound:
+                pass
             return self._client.containers.run(
                 s.sandbox_image,
                 command=["sleep", "infinity"],

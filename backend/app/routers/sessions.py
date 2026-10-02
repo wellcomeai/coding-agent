@@ -15,6 +15,7 @@ from ..db import get_db, session_factory
 from ..deps import current_user, user_github_token
 from ..events import bus
 from ..models import AgentSession, SessionEvent, User
+from ..security import SESSION_COOKIE, read_session
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -138,10 +139,15 @@ def _sse(event: dict) -> str:
 
 
 @router.get("/{session_id}/events")
-async def events(
-    session_id: str, request: Request, after: int = 0, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
-):
-    await _get_owned(db, session_id, user)
+async def events(session_id: str, request: Request, after: int = 0):
+    # Без Depends(get_db): иначе соединение из пула держалось бы всё время жизни SSE-потока
+    uid = read_session(request.cookies.get(SESSION_COOKIE))
+    async with session_factory()() as db:
+        sess = await db.get(AgentSession, session_id)
+    if not uid:
+        raise HTTPException(401, "Требуется вход через GitHub")
+    if not sess or sess.user_id != uid:
+        raise HTTPException(404, "Сессия не найдена")
     last_id = request.headers.get("last-event-id")
     if last_id and last_id.isdigit():
         after = max(after, int(last_id))
@@ -150,7 +156,7 @@ async def events(
         q = bus.subscribe(session_id)
         try:
             last = after
-            async with session_factory()() as s2:  # отдельная сессия: основная закрывается после ответа
+            async with session_factory()() as s2:
                 rows = (
                     await s2.execute(
                         select(SessionEvent)

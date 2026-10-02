@@ -48,7 +48,7 @@ def compact_history(history: list[dict], budget: int = HISTORY_CHAR_BUDGET) -> l
 def close_dangling_tool_calls(history: list[dict]) -> None:
     """Добавляет ответы на вызовы инструментов, прерванные остановкой, чтобы история оставалась валидной."""
     answered = {m.get("tool_call_id") for m in history if m.get("role") == "tool"}
-    for i, m in enumerate(list(history)):
+    for m in list(history):
         if m.get("role") == "assistant" and m.get("tool_calls"):
             for tc in m["tool_calls"]:
                 if tc["id"] not in answered:

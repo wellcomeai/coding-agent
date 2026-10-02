@@ -3,6 +3,7 @@
 
 import base64
 import json
+import logging
 import posixpath
 import shlex
 from collections.abc import Awaitable, Callable
@@ -13,6 +14,8 @@ from .. import github_app
 from ..config import get_settings
 from ..sandbox import Sandbox
 from ..timeweb import TimewebClient, TimewebError
+
+log = logging.getLogger(__name__)
 
 
 class ToolError(Exception):
@@ -511,3 +514,6 @@ async def execute(ctx: ToolContext, registry: dict[str, Callable], name: str, ra
         return f"Неверные параметры для {name}: {e}", True
     except (TimewebError, github_app.GitHubError) as e:
         return scrub(str(e), ctx.secrets), True
+    except Exception as e:  # noqa: BLE001  — ошибка инструмента не должна обрывать ход агента
+        log.exception("Ошибка инструмента %s", name)
+        return scrub(f"Внутренняя ошибка инструмента {name}: {e.__class__.__name__}: {e}", ctx.secrets), True

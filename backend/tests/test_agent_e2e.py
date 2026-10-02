@@ -135,3 +135,14 @@ async def test_auth_required(app_env):
         assert (await client.get("/api/sessions")).status_code == 401
         client.cookies.set(SESSION_COOKIE, "forged")
         assert (await client.get("/api/auth/me")).status_code == 401
+
+
+async def test_events_stream_access(app_env):
+    from app.main import create_app
+
+    user = await make_user()
+    transport = httpx.ASGITransport(app=create_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        assert (await client.get("/api/sessions/nope/events")).status_code == 401
+        client.cookies.set(SESSION_COOKIE, sign_session(user.id))
+        assert (await client.get("/api/sessions/nope/events")).status_code == 404
