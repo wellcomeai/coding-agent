@@ -78,15 +78,35 @@ Private key (.pem).
 
 ### 4. Запуск
 
+Автоматическая установка с автообновлением (рекомендуется):
+
 ```bash
-git clone https://github.com/wellcomeai/coding-agent.git && cd coding-agent
-cp .env.example .env
-nano .env        # заполнить все поля, инструкции внутри файла
-docker compose up -d --build
-docker compose logs -f app
+git clone -b claude/eager-allen-gm3xor https://github.com/wellcomeai/coding-agent.git /opt/coding-agent
+cp /opt/coding-agent/.env.example /opt/agent.env
+nano /opt/agent.env    # заполнить; DOMAIN=__AUTO__ и PUBLIC_URL=https://__AUTO__ — адрес <ip>.sslip.io
+bash /opt/coding-agent/deploy/install.sh
 ```
 
+Скрипт ставит Docker (с зеркалом Docker Hub от Timeweb), запускает сервис и включает systemd-таймер:
+каждые 2 минуты сервер проверяет ветку и при новых коммитах сам пересобирается
+(`journalctl -u coding-agent-update` — лог обновлений).
+
+Вручную: `cp .env.example .env && docker compose up -d --build`.
+
 Для `GITHUB_PRIVATE_KEY` можно взять вывод `awk 'NF {sub(/\r/, ""); printf "%s\\n",$0;}' app.pem`.
+
+### Робокасса
+
+В кабинете Робокассы → Технические настройки:
+
+| Поле | Значение | Метод |
+|---|---|---|
+| Result URL | `https://ваш-домен/api/billing/robokassa/result` | POST |
+| Success URL | `https://ваш-домен/api/billing/robokassa/success` | GET |
+| Fail URL | `https://ваш-домен/api/billing/robokassa/fail` | GET |
+
+Алгоритм хеша — как в `ROBOKASSA_HASH` (по умолчанию MD5). Баланс зачисляется только по подписанному
+уведомлению на Result URL; повторные уведомления не начисляют дважды.
 
 ### 5. Первый вход
 
