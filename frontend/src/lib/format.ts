@@ -41,17 +41,9 @@ export function modelLabel(id: string): string {
     "gpt-5.3-codex": "GPT-5.3 Codex",
     "kimi-k2.7-code": "Kimi K2.7 Code",
     "deepseek-v4-pro": "DeepSeek V4 Pro",
+    "deepseek-v4-flash": "DeepSeek V4 Flash",
   };
   return map[name] || name;
-}
-
-export function modelHint(id: string): string {
-  if (id.includes("opus")) return "Самая умная, для сложных задач";
-  if (id.includes("sonnet")) return "Лучший баланс качества и цены";
-  if (id.includes("codex")) return "Сильна в коде и рефакторинге";
-  if (id.includes("kimi")) return "Быстрая и недорогая";
-  if (id.includes("deepseek")) return "Самая экономичная";
-  return "";
 }
 
 export function repoName(full: string) {

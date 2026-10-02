@@ -9,7 +9,6 @@ import {
   Lock,
   Plus,
   Rocket,
-  Sparkles,
   Wand2,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -18,7 +17,6 @@ import { useApp } from "../App";
 import AutoTextarea from "../components/AutoTextarea";
 import Picker from "../components/Picker";
 import { GitHubMark, useToast } from "../components/ui";
-import { modelHint, modelLabel } from "../lib/format";
 
 const SUGGESTIONS = [
   { icon: Bug, text: "Найди и исправь баги", prompt: "Изучи проект, найди потенциальные баги и исправь самые важные из них. Покажи, что изменил." },
@@ -37,7 +35,6 @@ export default function NewTask() {
   const [repo, setRepo] = useState("");
   const [branches, setBranches] = useState<string[] | null>(null);
   const [branch, setBranch] = useState("");
-  const [model, setModel] = useState(me.default_model);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const ta = useRef<HTMLTextAreaElement>(null);
@@ -92,7 +89,6 @@ export default function NewTask() {
     const def = repos?.find((x) => x.full_name === repo)?.default_branch;
     return list.map((b) => ({ value: b, label: b, hint: b === def ? "основная ветка" : undefined }));
   }, [branches, branch, repo, repos]);
-  const modelItems = me.models.map((m) => ({ value: m, label: modelLabel(m), hint: modelHint(m) }));
 
   const noRepos = repos !== null && repos.length === 0;
   const lowBalance = me.balance_rub <= 0;
@@ -105,7 +101,7 @@ export default function NewTask() {
     try {
       const s = await api<SessionInfo>("/api/sessions", {
         method: "POST",
-        json: { repo_full_name: repo, base_branch: branch || undefined, model, message: text.trim() },
+        json: { repo_full_name: repo, base_branch: branch || undefined, message: text.trim() },
       });
       refreshSessions();
       window.location.hash = `#/s/${s.id}`;
@@ -176,14 +172,6 @@ export default function NewTask() {
               placeholder="Ветка"
               title="Базовая ветка"
               searchable={branchItems.length > 8}
-              direction="down"
-            />
-            <Picker
-              icon={<Sparkles size={14} />}
-              value={model}
-              items={modelItems}
-              onChange={setModel}
-              title="Модель"
               direction="down"
             />
             <div className="spacer" />

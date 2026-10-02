@@ -41,9 +41,12 @@ class Settings(BaseSettings):
     # --- LLM: Timeweb AI Gateway (OpenAI-совместимый) ---
     ai_gateway_base_url: str = "https://api.timeweb.ai/v1"
     ai_gateway_api_key: str = ""
-    # Модели, доступные пользователям (имена как их принимает gateway), через запятую.
-    agent_models: str = "anthropic/claude-sonnet-5,openai/gpt-5.3-codex,moonshot/kimi-k2.7-code,deepseek/deepseek-v4-pro"
-    default_model: str = "anthropic/claude-sonnet-5"
+    # Связка моделей, выбора в интерфейсе нет. Агент работает на одной сильной модели: так стабильнее
+    # поведение и выше попадание в кэш промпта. Лёгкая модель только пишет пользователю короткие статусы.
+    agent_model: str = "deepseek/deepseek-v4-pro"
+    narrator_model: str = "deepseek/deepseek-v4-flash"  # пусто — статусы без модели, по названиям инструментов
+    narrator_max_tokens: int = 80
+    narrator_timeout_seconds: int = 20
     agent_max_steps: int = 80
     agent_max_output_tokens: int = 16000
     # Без стриминга ответ приходит целиком, поэтому таймаут должен покрывать всю генерацию.
@@ -121,7 +124,7 @@ class Settings(BaseSettings):
 
     @property
     def models(self) -> list[str]:
-        return [m.strip() for m in self.agent_models.split(",") if m.strip()]
+        return [self.agent_model]
 
     def github_private_key_pem(self) -> str:
         if self.github_private_key:

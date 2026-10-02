@@ -18,6 +18,7 @@ from ..security import decrypt
 from ..timeweb import TimewebClient
 from . import tools as T
 from .llm import get_llm
+from .narrator import Narrator
 from .prompts import build_system_prompt
 
 log = logging.getLogger(__name__)
@@ -142,6 +143,7 @@ class AgentRunner:
         s = get_settings()
         history: list[dict] = []
         sess: AgentSession | None = None
+        narrator: Narrator | None = None
         try:
             async with session_factory()() as db:
                 sess = await db.get(AgentSession, session_id)
@@ -149,6 +151,8 @@ class AgentRunner:
                 if not sess or not user:
                     return
                 sess.status = "running"
+                # Все сессии работают на одной модели агента, включая созданные до отказа от выбора модели
+                sess.model = get_settings().agent_model
                 sess.last_activity_at = datetime.now(UTC)
                 if sess.title == "Новая сессия":
                     sess.title = text.strip().splitlines()[0][:80] or sess.title
@@ -186,6 +190,9 @@ class AgentRunner:
             )
             await billing.price_book.refresh()
             llm = get_llm()
+            narrator = Narrator(session_id, user.id, next(
+                (m["content"] for m in history if m.get("role") == "user" and not str(m["content"]).startswith("[")), text
+            ))
 
             for _step in range(s.agent_max_steps):
                 async with session_factory()() as db:
@@ -244,10 +251,12 @@ class AgentRunner:
                 if not result.tool_calls:
                     break
 
+                step_tools = []
                 for tc in result.tool_calls:
                     name = tc["function"]["name"]
                     args = tc["function"]["arguments"]
                     await bus.publish(session_id, "tool_call", {"id": tc["id"], "name": name, "arguments": args})
+                    await narrator.tool_started(name, args)
                     output, is_error = await T.execute(ctx, registry, name, args)
                     history.append({"role": "tool", "tool_call_id": tc["id"], "content": output})
                     await bus.publish(
@@ -255,13 +264,18 @@ class AgentRunner:
                         "tool_result",
                         {"id": tc["id"], "name": name, "output": T.truncate(output, 8000), "is_error": is_error},
                     )
+                    step_tools.append({"name": name, "args": args, "output": output, "is_error": is_error})
                 await self._save_history(session_id, history)
+                # Пока сильная модель думает над следующим шагом, лёгкая рассказывает пользователю о текущем
+                narrator.step_done(result.content, step_tools)
             else:
                 await bus.publish(
                     session_id, "error", {"message": f"Достигнут лимит шагов ({s.agent_max_steps}). Напишите «продолжай»."}
                 )
+            await self._close_narrator(narrator)
             await self._finish(session_id, "idle")
         except asyncio.CancelledError:
+            await asyncio.shield(self._close_narrator(narrator))
             close_dangling_tool_calls(history)
             history.append({"role": "user", "content": "[Пользователь остановил выполнение]"})
             await asyncio.shield(self._save_history(session_id, history))
@@ -270,11 +284,18 @@ class AgentRunner:
             raise
         except Exception as e:  # noqa: BLE001
             log.exception("Ошибка в сессии %s", session_id)
+            await self._close_narrator(narrator)
             close_dangling_tool_calls(history)
             if history:
                 await self._save_history(session_id, history)
             await bus.publish(session_id, "error", {"message": f"Ошибка: {e}"[:2000]})
             await self._finish(session_id, "error")
+
+    @staticmethod
+    async def _close_narrator(narrator: Narrator | None) -> None:
+        # Статусы после завершения хода только запутали бы пользователя
+        if narrator:
+            await narrator.close()
 
     async def _save_history(self, session_id: str, history: list[dict]) -> None:
         async with session_factory()() as db:

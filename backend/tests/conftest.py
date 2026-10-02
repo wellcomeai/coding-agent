@@ -9,6 +9,8 @@ os.environ.setdefault("SESSION_SECRET", "test-secret")
 os.environ.setdefault("SANDBOX_PROVIDER", "local")
 os.environ.setdefault("TIMEWEB_API_TOKEN", "")
 os.environ.setdefault("FRONTEND_DIST", "/nonexistent")
+# Комментатор включается только в своих тестах, чтобы остальные не ходили в сеть
+os.environ.setdefault("NARRATOR_MODEL", "")
 
 
 @pytest.fixture

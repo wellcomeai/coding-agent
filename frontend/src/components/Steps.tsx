@@ -40,6 +40,14 @@ const TW: Record<string, string> = {
   timeweb_app_status: "Статус приложения",
   timeweb_deploy_logs: "Логи сборки",
   timeweb_app_logs: "Логи приложения",
+  timeweb_wait_deploy: "Ожидание деплоя",
+  timeweb_db_options: "Тарифы баз данных",
+  timeweb_list_databases: "Список баз данных",
+  timeweb_create_database: "Создание базы данных",
+  timeweb_database_status: "Статус базы данных",
+  timeweb_wait_database: "Ожидание базы данных",
+  timeweb_connect_database: "Подключение базы",
+  timeweb_set_app_env: "Переменные приложения",
 };
 
 export function describe(t: ToolItem): Meta {

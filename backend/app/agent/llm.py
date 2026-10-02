@@ -40,7 +40,9 @@ class LLMClient:
         messages: list[dict],
         tools: list[dict],
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        **opts,
     ) -> LLMResult:
+        """opts: max_tokens, stream, timeout, temperature, extra_body — переопределяют настройки агента для одного вызова."""
         raise NotImplementedError
 
 
@@ -51,10 +53,13 @@ class GatewayLLM(LLMClient):
             base_url=s.ai_gateway_base_url, api_key=s.ai_gateway_api_key or "missing", timeout=s.llm_timeout_seconds
         )
 
-    async def complete(self, model, messages, tools, on_delta=None) -> LLMResult:
+    async def complete(self, model, messages, tools, on_delta=None, **opts) -> LLMResult:
         s = get_settings()
-        params = dict(model=model, messages=messages, tools=tools or None, max_tokens=s.agent_max_output_tokens)
-        if s.llm_stream:
+        params = dict(model=model, messages=messages, tools=tools or None, max_tokens=opts.get("max_tokens") or s.agent_max_output_tokens)
+        for key in ("timeout", "extra_body", "temperature"):
+            if opts.get(key) is not None:
+                params[key] = opts[key]
+        if opts.get("stream", s.llm_stream):
             result = await self._complete_stream(params, on_delta)
         else:
             result = await self._complete_once(params)
@@ -133,6 +138,7 @@ def _finalize_tool_calls(result: LLMResult) -> LLMResult:
 
 
 _llm: LLMClient | None = None
+_narrator_llm: LLMClient | None = None
 
 
 def get_llm() -> LLMClient:
@@ -145,3 +151,16 @@ def get_llm() -> LLMClient:
 def set_llm(llm: LLMClient | None) -> None:
     global _llm
     _llm = llm
+
+
+def get_narrator_llm() -> LLMClient:
+    """Отдельный клиент для комментатора, чтобы в тестах его можно было подменить независимо от агента."""
+    global _narrator_llm
+    if _narrator_llm is None:
+        _narrator_llm = GatewayLLM()
+    return _narrator_llm
+
+
+def set_narrator_llm(llm: LLMClient | None) -> None:
+    global _narrator_llm
+    _narrator_llm = llm

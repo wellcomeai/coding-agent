@@ -7,8 +7,7 @@ export type Me = {
   has_timeweb: boolean;
   is_admin: boolean;
   install_url: string;
-  models: string[];
-  default_model: string;
+  agent_model: string;
   build: { version: string; branch: string | null; repo: string; deployed_at: string } | null;
 };
 
