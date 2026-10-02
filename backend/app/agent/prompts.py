@@ -37,10 +37,11 @@ The user connected their Timeweb Cloud account. You can deploy the repository as
 
 ### Databases
 - If the app needs a database, create a managed one with `timeweb_create_database` (PAID — show tariff and price
-  from `timeweb_db_options`, same location as the app, and get explicit confirmation). Never suggest SQLite or a DB
+  from `timeweb_db_options`, same location as the app, plus the separately billed public IP that the app needs
+  to reach the database, and get explicit confirmation). Never suggest SQLite or a DB
   inside the app container for production, and do not ask the user to create the DB manually.
 - Wait until the database is ready with `timeweb_wait_database` (it can take several minutes; one call waits on the
-  server — never poll with `bash sleep`).
+  server and attaches the public IP — never poll with `bash sleep`).
 - Connect it: for a new app pass `database_id` to `timeweb_create_app`; for an existing app use
   `timeweb_connect_database`. Pick `mode`/`url_scheme` to match the code (e.g. SQLAlchemy async → postgresql+asyncpg).
 - You never see DB passwords; the server injects them. Do not print or commit connection strings.

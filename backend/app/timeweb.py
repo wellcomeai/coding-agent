@@ -154,6 +154,21 @@ class TimewebClient:
         body = await self.request("POST", "/api/v1/databases", json=payload)
         return body.get("db") or body.get("database") or body
 
+    # --- Плавающие IP: публичный адрес для управляемой базы выдаётся только так ---
+    async def list_floating_ips(self) -> list[dict]:
+        return (await self.request("GET", "/api/v1/floating-ips"))["ips"]
+
+    async def create_floating_ip(self, availability_zone: str) -> dict:
+        body = await self.request(
+            "POST", "/api/v1/floating-ips", json={"is_ddos_guard": False, "availability_zone": availability_zone}
+        )
+        return body["ip"]
+
+    async def bind_floating_ip(self, ip_id: str, resource_type: str, resource_id: int | str) -> None:
+        await self.request(
+            "POST", f"/api/v1/floating-ips/{ip_id}/bind", json={"resource_type": resource_type, "resource_id": resource_id}
+        )
+
     # --- Cloud AI (прайс) ---
     async def ai_models(self) -> list[dict]:
         return (await self.request("GET", "/api/v3/cloud-ai/models?limit=500"))["models"]
