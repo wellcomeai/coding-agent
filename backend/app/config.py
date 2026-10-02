@@ -1,0 +1,89 @@
+from functools import lru_cache
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    # --- Общие ---
+    app_name: str = "Coding Agent"
+    # Публичный адрес сервиса (без завершающего слэша), например https://agent.example.ru
+    public_url: str = "http://localhost:8000"
+    database_url: str = "sqlite+aiosqlite:///./data/app.db"
+    # Мастер-ключ для шифрования токенов пользователей (Fernet, 32 байта base64).
+    # Сгенерировать: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    secret_key: str = Field(default="", description="Fernet key")
+    # Ключ для подписи cookie сессии
+    session_secret: str = "change-me"
+    cookie_secure: bool = False
+    # Логины GitHub администраторов (через запятую): могут пополнять балансы
+    admin_github_logins: str = ""
+    frontend_dist: str = "../frontend/dist"
+
+    # --- GitHub App ---
+    github_app_id: str = ""
+    github_app_slug: str = ""
+    github_client_id: str = ""
+    github_client_secret: str = ""
+    # PEM приватного ключа GitHub App (можно с \n вместо переносов) или путь к файлу
+    github_private_key: str = ""
+    github_private_key_path: str = ""
+    github_api_url: str = "https://api.github.com"
+    github_web_url: str = "https://github.com"
+
+    # --- LLM: Timeweb AI Gateway (OpenAI-совместимый) ---
+    ai_gateway_base_url: str = "https://api.timeweb.ai/v1"
+    ai_gateway_api_key: str = ""
+    # Модели, доступные пользователям (имена как их принимает gateway), через запятую.
+    agent_models: str = "anthropic/claude-sonnet-5,openai/gpt-5.3-codex,moonshot/kimi-k2.7-code,deepseek/deepseek-v4-pro"
+    default_model: str = "anthropic/claude-sonnet-5"
+    agent_max_steps: int = 80
+    agent_max_output_tokens: int = 16000
+    llm_timeout_seconds: int = 300
+
+    # --- Биллинг ---
+    # Наш токен Timeweb Cloud: используется для загрузки прайса моделей Cloud AI
+    timeweb_api_token: str = ""
+    timeweb_api_url: str = "https://api.timeweb.cloud"
+    # Наценка на себестоимость токенов (1.0 = без наценки)
+    price_markup: float = 1.5
+    # Цена по умолчанию (руб. за 1M токенов), если модели нет в прайсе Timeweb
+    default_price_in_per_m: float = 500.0
+    default_price_out_per_m: float = 2500.0
+    # Стартовый бонус новым пользователям, руб.
+    signup_bonus_rub: float = 0.0
+
+    # --- Песочницы ---
+    sandbox_provider: str = "docker"  # docker | local (local — только для разработки!)
+    sandbox_image: str = "coding-agent-sandbox:latest"
+    sandbox_memory: str = "2g"
+    sandbox_cpus: float = 1.0
+    sandbox_pids_limit: int = 512
+    sandbox_network: str = "bridge"
+    sandbox_idle_minutes: int = 30
+    sandbox_local_root: str = "./data/sandboxes"
+    tool_timeout_seconds: int = 300
+    tool_output_limit: int = 30000
+
+    @property
+    def admin_logins(self) -> set[str]:
+        return {x.strip().lower() for x in self.admin_github_logins.split(",") if x.strip()}
+
+    @property
+    def models(self) -> list[str]:
+        return [m.strip() for m in self.agent_models.split(",") if m.strip()]
+
+    def github_private_key_pem(self) -> str:
+        if self.github_private_key:
+            return self.github_private_key.replace("\\n", "\n")
+        if self.github_private_key_path:
+            with open(self.github_private_key_path) as f:
+                return f.read()
+        return ""
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
