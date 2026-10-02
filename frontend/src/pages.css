@@ -302,6 +302,24 @@ a.step:hover {
   font-size: 13.5px;
   padding-left: 36px;
 }
+.thinking .shimmer {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* Веха от комментатора: важный шаг (пуш, деплой, база) остаётся в ленте одной строкой */
+.progress-note {
+  margin-left: 36px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+.progress-note svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--success);
+}
 .composer-dock {
   position: sticky;
   bottom: 0;

@@ -93,6 +93,5 @@ async def me(user: User = Depends(current_user)):
         "has_timeweb": bool(user.timeweb_token_enc),
         "is_admin": is_admin,
         "install_url": github_app.install_url(),
-        "models": s.models,
-        "default_model": s.default_model,
+        "agent_model": s.agent_model,
     }

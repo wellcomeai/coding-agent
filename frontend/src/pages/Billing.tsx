@@ -106,7 +106,7 @@ export default function Billing({ query }: { query: URLSearchParams }) {
         <div className="card">
           <div className="card-head">
             <div>
-              <h3>Цены моделей</h3>
+              <h3>Цена</h3>
               <p className="muted small">За 1 млн токенов. «Типичная задача» — небольшая доработка: ~250 тыс. токенов на входе (большая часть из кэша) и 10 тыс. на выходе.</p>
             </div>
           </div>
@@ -168,7 +168,7 @@ export default function Billing({ query }: { query: URLSearchParams }) {
                           </div>
                           <div className="faint small">
                             {new Date(l.date).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
-                            {l.kind === "usage" && ` · ${l.count} ${l.count === 1 ? "запрос" : "запросов"} к ${modelLabel(l.meta?.model || "")}`}
+                            {l.kind === "usage" && ` · ${l.count} ${l.count === 1 ? "запрос" : "запросов"}`}
                             {l.meta?.comment ? ` · ${l.meta.comment}` : ""}
                           </div>
                         </div>

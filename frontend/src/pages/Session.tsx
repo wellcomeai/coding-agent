@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   ChevronDown,
+  CheckCircle2,
   ChevronRight,
   ExternalLink,
   FileDiff,
@@ -37,6 +38,7 @@ type Item =
   | ({ kind: "tool" } & ToolItem)
   | { kind: "error"; text: string }
   | { kind: "pr"; url: string }
+  | { kind: "progress"; text: string }
   | { kind: "info"; text: string };
 
 function reduce(items: Item[], ev: AgentEvent): Item[] {
@@ -58,6 +60,8 @@ function reduce(items: Item[], ev: AgentEvent): Item[] {
       return [...items, { kind: "info", text: "Выполнение остановлено" }];
     case "pr":
       return [...items, { kind: "pr", url: d.url }];
+    case "progress":
+      return [...items, { kind: "progress", text: d.text }];
     default:
       return items;
   }
@@ -101,6 +105,8 @@ export default function SessionView({ id }: { id: string }) {
   const [info, setInfo] = useState<SessionInfo | null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState("");
+  // Живой статус от лёгкой модели: не сохраняется, только строка состояния под лентой
+  const [narration, setNarration] = useState<{ id: number; text: string } | null>(null);
   const [running, setRunning] = useState(false);
   const [detail, setDetail] = useState<string | null>(null);
   const [cost, setCost] = useState(0);
@@ -123,6 +129,15 @@ export default function SessionView({ id }: { id: string }) {
         setDraft((d) => d + ev.data.text);
         return;
       }
+      if (ev.type === "narration_delta") {
+        const { id: nid, text: chunk } = ev.data;
+        setNarration((n) => (n && n.id === nid ? { id: nid, text: n.text + chunk } : { id: nid, text: chunk }));
+        return;
+      }
+      if (ev.type === "narration") {
+        setNarration({ id: ev.data.id, text: ev.data.text });
+        return;
+      }
       if (ev.type === "assistant_message" || ev.type === "tool_call") setDraft("");
       if (ev.type === "ready") {
         setRunning(ev.data.running);
@@ -133,6 +148,7 @@ export default function SessionView({ id }: { id: string }) {
         setDetail(ev.data.detail || null);
         if (ev.data.status !== "running") {
           setDraft("");
+          setNarration(null);
           refreshMe();
           refreshSessions();
           loadInfo().catch(() => {});
@@ -333,6 +349,13 @@ export default function SessionView({ id }: { id: string }) {
                     )}
                   </div>
                 );
+              case "progress":
+                return (
+                  <div key={i} className="progress-note">
+                    <CheckCircle2 size={15} />
+                    <span>{b.text}</span>
+                  </div>
+                );
               case "info":
                 return (
                   <div key={i} className="event-card info">
@@ -349,10 +372,10 @@ export default function SessionView({ id }: { id: string }) {
               </div>
             </div>
           )}
-          {running && !draft && (blocks[blocks.length - 1]?.kind !== "steps" || !(blocks[blocks.length - 1] as any).tools.some((t: ToolItem) => t.output === undefined)) && (
+          {running && !draft && (
             <div className="thinking">
               <Loader2 size={15} className="spin faint" />
-              <span className="shimmer">{detail || "Агент думает…"}</span>
+              <span className="shimmer">{narration?.text.trim() || detail || "Агент думает…"}</span>
             </div>
           )}
         </div>

@@ -164,3 +164,49 @@ async def test_price_book_falls_back_to_admin_token(app_env, monkeypatch):
     await pb.refresh()
     assert pb.get("anthropic/claude-sonnet-5").input == 0.0004
     config.get_settings.cache_clear()
+
+
+class WaitFake(DbFake):
+    def __init__(self, deploy_states, db_states):
+        super().__init__()
+        self.deploy_states, self.db_states = list(deploy_states), list(db_states)
+
+    async def request(self, method, path, **kw):
+        if path.startswith("/api/v1/apps/5/deploys"):
+            status = self.deploy_states.pop(0) if len(self.deploy_states) > 1 else self.deploy_states[0]
+            ended = "2026-10-01T10:00:00Z" if status in ("success", "failure") else None
+            return {"deploys": [{"id": "d2", "status": status, "ended_at": ended}, {"id": "d1", "status": "success"}]}
+        if path == "/api/v1/apps/5/deploy/d2/logs":
+            return {"deploy_logs": ["npm ERR! build failed"]}
+        if path == "/api/v1/databases/777":
+            self.db_status, self.ip = self.db_states.pop(0) if len(self.db_states) > 1 else self.db_states[0]
+        return await super().request(method, path, **kw)
+
+
+async def test_wait_deploy_polls_on_server_and_returns_logs_on_failure(app_env, monkeypatch):
+    monkeypatch.setattr(T, "WAIT_POLL_SECONDS", 0)
+    tw = WaitFake(["deploy", "deploy", "failure"], [])
+    out, err = await run(ctx(tw, 1), "timeweb_wait_deploy", app_id="5", deploy_id="d2")
+    data = json.loads(out)
+    assert not err and data["finished"] and data["deploy"]["status"] == "failure"
+    assert "build failed" in data["deploy_logs_tail"] and tw.deploy_states == ["failure"]
+
+    tw = WaitFake(["success"], [])
+    data = json.loads((await run(ctx(tw, 1), "timeweb_wait_deploy", app_id="5"))[0])
+    assert data["finished"] and "deploy_logs_tail" not in data
+
+
+async def test_wait_deploy_gives_up_after_timeout(app_env, monkeypatch):
+    monkeypatch.setattr(T, "WAIT_POLL_SECONDS", 0)
+    monkeypatch.setattr(T, "_wait_deadline", lambda _m: 0)
+    data = json.loads((await run(ctx(WaitFake(["deploy"], []), 1), "timeweb_wait_deploy", app_id="5"))[0])
+    assert data["finished"] is False and "note" in data
+
+
+async def test_wait_database_until_public_ip(app_env, monkeypatch):
+    monkeypatch.setattr(T, "WAIT_POLL_SECONDS", 0)
+    uid = await _user()
+    tw = WaitFake([], [("creating", None), ("started", None), ("started", "5.129.242.60")])
+    out, err = await run(ctx(tw, uid), "timeweb_wait_database", database_id=777)
+    data = json.loads(out)
+    assert not err and data["ready"] and data["public_ip"] == "5.129.242.60"

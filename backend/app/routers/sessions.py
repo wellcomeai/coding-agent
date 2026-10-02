@@ -25,7 +25,7 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 class CreateSession(BaseModel):
     repo_full_name: str
     base_branch: str | None = None
-    model: str | None = None
+    model: str | None = None  # устарело, игнорируется
     message: str | None = Field(default=None, max_length=50_000)
 
 
@@ -70,9 +70,7 @@ async def list_sessions(user: User = Depends(current_user), db: AsyncSession = D
 @router.post("")
 async def create_session(body: CreateSession, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
     settings = get_settings()
-    model = body.model or settings.default_model
-    if model not in settings.models:
-        raise HTTPException(400, f"Модель недоступна: {model}")
+    model = settings.agent_model  # выбора модели нет: агент всегда работает на одной связке
     token = await user_github_token(db, user)
     repos = await github_app.list_user_repos(token)
     repo = next((r for r in repos if r["full_name"].lower() == body.repo_full_name.lower()), None)

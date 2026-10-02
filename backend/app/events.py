@@ -13,7 +13,7 @@ from .db import session_factory
 from .models import SessionEvent
 
 # События, которые не сохраняются в БД (только live-стриминг)
-EPHEMERAL = {"assistant_delta"}
+EPHEMERAL = {"assistant_delta", "narration", "narration_delta"}
 
 
 class EventBus:
