@@ -15,6 +15,7 @@ if [ "$LOCAL" = "$REMOTE" ] && [ "${1:-}" != "--force" ]; then
 fi
 echo "Обновление $BRANCH: ${LOCAL:0:7} -> ${REMOTE:0:7}"
 git reset -q --hard "$REMOTE"
+export APP_VERSION="${REMOTE:0:7}"
 docker compose build
 # временный просмотр лога первичной установки занимает порт 80 — освобождаем его для Caddy
 pkill -f "http.server 80" 2>/dev/null || true

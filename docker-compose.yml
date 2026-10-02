@@ -9,6 +9,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD}@db:5432/agent
       SANDBOX_PROVIDER: docker
       SANDBOX_IMAGE: coding-agent-sandbox:latest
+      APP_VERSION: ${APP_VERSION:-dev}
     volumes:
       # Доступ к Docker для создания песочниц (контейнер на каждую сессию)
       - /var/run/docker.sock:/var/run/docker.sock
