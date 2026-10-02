@@ -50,7 +50,12 @@ curl -fsSL https://get.docker.com | sh
 
 ### 2. GitHub App
 
-GitHub → Settings → Developer settings → GitHub Apps → **New GitHub App**:
+**Автоматически (рекомендуется).** Задайте в `.env` `SETUP_TOKEN` (`openssl rand -hex 16`). После запуска
+откройте `https://ваш-домен/setup?token=<SETUP_TOKEN>` и нажмите «Создать GitHub App». GitHub создаст
+приложение с нужными правами и адресами и вернёт ключи сервису, они сохранятся в БД в зашифрованном виде.
+Затем GitHub предложит установить приложение на репозитории.
+
+**Вручную.** GitHub → Settings → Developer settings → GitHub Apps → **New GitHub App**:
 
 | Поле | Значение |
 |---|---|
@@ -62,7 +67,7 @@ GitHub → Settings → Developer settings → GitHub Apps → **New GitHub App*
 | Repository permissions | **Contents: Read & write**, **Pull requests: Read & write**, **Checks: Read**, **Commit statuses: Read**, Metadata: Read |
 | Where can this GitHub App be installed? | **Any account** |
 
-После создания возьмите App ID, Client ID, slug (из адреса страницы приложения), сгенерируйте Client secret и
+После создания впишите в `.env` App ID, Client ID, slug (из адреса страницы приложения), Client secret и
 Private key (.pem).
 
 ### 3. Ключ Timeweb AI Gateway

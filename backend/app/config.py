@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     # Логины GitHub администраторов (через запятую): могут пополнять балансы
     admin_github_logins: str = ""
     frontend_dist: str = "../frontend/dist"
+    # Одноразовый токен для страницы /setup (автосоздание GitHub App)
+    setup_token: str = ""
 
     # --- GitHub App ---
     github_app_id: str = ""
@@ -66,6 +68,10 @@ class Settings(BaseSettings):
     sandbox_local_root: str = "./data/sandboxes"
     tool_timeout_seconds: int = 300
     tool_output_limit: int = 30000
+
+    @property
+    def github_configured(self) -> bool:
+        return bool(self.github_app_id and self.github_client_id and self.github_client_secret and self.github_private_key_pem())
 
     @property
     def admin_logins(self) -> set[str]:

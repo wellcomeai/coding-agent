@@ -73,3 +73,13 @@ class SessionEvent(Base):
     type: Mapped[str] = mapped_column(String(30))
     data: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AppConfig(Base):
+    """Настройки, созданные через веб-мастер (например, GitHub App). Значения зашифрованы."""
+
+    __tablename__ = "app_config"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value_enc: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
