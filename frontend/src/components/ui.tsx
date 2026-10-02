@@ -136,3 +136,35 @@ export function TimewebMark({ size = 20 }: { size?: number }) {
     </svg>
   );
 }
+
+/* ---------- Флаг, который запоминается в браузере ---------- */
+export function useStoredFlag(key: string, initial: boolean): [boolean, (v: boolean | ((p: boolean) => boolean)) => void] {
+  const [value, setValue] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem(key);
+      return v === null ? initial : v === "1";
+    } catch {
+      return initial;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, value ? "1" : "0");
+    } catch {
+      /* private mode */
+    }
+  }, [key, value]);
+  return [value, setValue];
+}
+
+/* ---------- media query ---------- */
+export function useMedia(query: string): boolean {
+  const [match, setMatch] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const m = window.matchMedia(query);
+    const on = () => setMatch(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, [query]);
+  return match;
+}

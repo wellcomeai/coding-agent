@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import { api, ApiError, Me, SessionInfo } from "./api";
 import Sidebar from "./components/Sidebar";
 import TopUpModal from "./components/TopUpModal";
-import { Logo, ToastProvider } from "./components/ui";
+import { Logo, ToastProvider, useStoredFlag } from "./components/ui";
 import { Menu } from "lucide-react";
 import Admin from "./pages/Admin";
 import Billing from "./pages/Billing";
@@ -17,6 +17,8 @@ type Ctx = {
   sessions: SessionInfo[] | null;
   refreshSessions: () => Promise<void>;
   openTopUp: () => void;
+  sidebarCollapsed: boolean;
+  toggleSidebar: () => void;
 };
 const AppCtx = createContext<Ctx>(null as any);
 export const useApp = () => useContext(AppCtx);
@@ -67,6 +69,20 @@ function Shell({ me, refreshMe }: { me: Me; refreshMe: () => Promise<void> }) {
   const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
   const [topUp, setTopUp] = useState(false);
   const [drawer, setDrawer] = useState(false);
+  const [collapsed, setCollapsed] = useStoredFlag("sidebarCollapsed", false);
+  const toggleSidebar = useCallback(() => setCollapsed((c) => !c), [setCollapsed]);
+
+  // Ctrl/⌘ + B — свернуть/развернуть левую панель
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        toggleSidebar();
+      }
+    };
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  }, [toggleSidebar]);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -92,8 +108,16 @@ function Shell({ me, refreshMe }: { me: Me; refreshMe: () => Promise<void> }) {
   else page = <NewTask />;
 
   return (
-    <AppCtx.Provider value={{ me, refreshMe, sessions, refreshSessions, openTopUp: () => setTopUp(true) }}>
-      <div className={"shell" + (drawer ? " drawer-open" : "")} onClick={(e) => drawer && e.target === e.currentTarget && setDrawer(false)}>
+    <AppCtx.Provider value={{
+        me,
+        refreshMe,
+        sessions,
+        refreshSessions,
+        openTopUp: () => setTopUp(true),
+        sidebarCollapsed: collapsed,
+        toggleSidebar,
+      }}>
+      <div className={"shell" + (drawer ? " drawer-open" : "") + (collapsed ? " collapsed" : "")} onClick={(e) => drawer && e.target === e.currentTarget && setDrawer(false)}>
         <Sidebar path={path} onClose={() => setDrawer(false)} />
         <main className="main">
           <div className="mobile-bar">

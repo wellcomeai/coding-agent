@@ -5,20 +5,23 @@ import {
   LogOut,
   Monitor,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Search,
   Settings as SettingsIcon,
   Shield,
   Sun,
+  Wallet,
   X,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { useApp } from "../App";
 import { dateGroup, relTime, repoName, rub } from "../lib/format";
-import { Logo, useOutside, useTheme } from "./ui";
+import { Logo, useMedia, useOutside, useTheme } from "./ui";
 
 export default function Sidebar({ path, onClose }: { path: string; onClose: () => void }) {
-  const { me, sessions, openTopUp } = useApp();
+  const { me, sessions, openTopUp, sidebarCollapsed, toggleSidebar } = useApp();
   const [q, setQ] = useState("");
   const [menu, setMenu] = useState(false);
   const [theme, setTheme] = useTheme();
@@ -39,6 +42,9 @@ export default function Sidebar({ path, onClose }: { path: string; onClose: () =
     return out;
   }, [sessions, q]);
 
+  const mobile = useMedia("(max-width: 860px)");
+  if (sidebarCollapsed && !mobile) return <Rail path={path} />;
+
   return (
     <aside className="sidebar">
       <div className="sidebar-top">
@@ -47,6 +53,9 @@ export default function Sidebar({ path, onClose }: { path: string; onClose: () =
             <Logo /> Coding Agent
           </a>
           <div className="spacer" />
+          <button className="btn ghost icon sm desktop-only" onClick={toggleSidebar} title="Свернуть панель (Ctrl+B)" aria-label="Свернуть панель">
+            <PanelLeftClose size={17} />
+          </button>
           <button className="btn ghost icon sm mobile-only" onClick={onClose} aria-label="Закрыть" style={{ display: "none" }}>
             <X size={16} />
           </button>
@@ -179,6 +188,47 @@ export default function Sidebar({ path, onClose }: { path: string; onClose: () =
           )}
         </div>
       </div>
+    </aside>
+  );
+}
+
+/** Свёрнутая левая панель: узкая полоса с иконками. */
+function Rail({ path }: { path: string }) {
+  const { me, sessions, openTopUp, toggleSidebar } = useApp();
+  const recent = (sessions || []).slice(0, 8);
+  return (
+    <aside className="sidebar rail">
+      <button className="btn ghost icon" onClick={toggleSidebar} title="Развернуть панель (Ctrl+B)" aria-label="Развернуть панель">
+        <PanelLeftOpen size={18} />
+      </button>
+      <a href="#/" className="btn primary icon" title="Новая задача" aria-label="Новая задача">
+        <Plus size={18} />
+      </a>
+      <div className="rail-list">
+        {recent.map((s) => (
+          <a
+            key={s.id}
+            href={`#/s/${s.id}`}
+            className={"rail-item" + (path === `/s/${s.id}` ? " active" : "")}
+            title={`${s.title} — ${repoName(s.repo_full_name)}`}
+          >
+            {s.title.trim().charAt(0).toUpperCase() || "•"}
+            <span className={"status-dot " + (s.status === "running" ? "running" : s.status === "error" ? "error" : s.pr_url ? "pr" : "")} />
+          </a>
+        ))}
+      </div>
+      <div className="spacer" />
+      <button
+        className={"btn ghost icon" + (me.balance_rub <= 0 ? " danger" : "")}
+        onClick={openTopUp}
+        title={`Баланс ${rub(me.balance_rub)} — пополнить`}
+        aria-label="Пополнить баланс"
+      >
+        <Wallet size={18} />
+      </button>
+      <a href="#/settings" title={`@${me.login} — настройки`} className="rail-avatar">
+        {me.avatar_url ? <img className="avatar" src={me.avatar_url} alt="" /> : <span className="avatar" />}
+      </a>
     </aside>
   );
 }

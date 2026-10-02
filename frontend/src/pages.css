@@ -205,7 +205,7 @@ a.step:hover {
   position: sticky;
   top: 0;
   z-index: 15;
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  background: color-mix(in srgb, var(--bg) 96%, transparent);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border);
 }
@@ -967,5 +967,272 @@ a.step:hover {
   }
   .session-title {
     font-size: 15px;
+  }
+}
+
+/* ============ Свёрнутая левая панель ============ */
+.sidebar.rail {
+  width: 60px;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+}
+.rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.rail-item {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  text-decoration: none !important;
+}
+.rail-item:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.rail-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.rail-item .status-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  border: 2px solid var(--surface);
+  width: 10px;
+  height: 10px;
+}
+.rail-item .status-dot:not(.running):not(.error):not(.pr) {
+  display: none;
+}
+.rail-avatar {
+  display: grid;
+  place-items: center;
+}
+.btn.pressed {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* ============ Сессия: шапка в одну строку ============ */
+.session-layout {
+  display: flex;
+  min-height: 100%;
+  --content-w: 860px;
+}
+.shell.collapsed .session-layout:not(.with-details) {
+  --content-w: 1040px;
+}
+.shell.collapsed .session-layout.with-details,
+.shell:not(.collapsed) .session-layout:not(.with-details) {
+  --content-w: 940px;
+}
+.session-layout > .session-wrap {
+  flex: 1;
+  min-width: 0;
+}
+.session-header-inner {
+  max-width: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px 9px 20px;
+  min-height: 52px;
+}
+.session-header-inner .session-title {
+  min-width: 0;
+  flex: 0 1 auto;
+  max-width: 42%;
+}
+.session-header .tabs {
+  margin: 0 0 0 6px;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  flex: none;
+}
+.session-header .tab {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 7px;
+  margin: 0;
+  font-size: 13px;
+}
+.session-header .tab.active {
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.session-header .tab .count {
+  background: var(--surface-3);
+}
+.timeline,
+.composer-dock .inner {
+  max-width: var(--content-w);
+}
+.timeline {
+  gap: 14px;
+  padding-top: 22px;
+}
+.md {
+  line-height: 1.6;
+}
+.md p {
+  margin-bottom: 8px;
+}
+
+/* ============ Правая панель «Детали» ============ */
+.details {
+  width: 300px;
+  flex: none;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  animation: fade 0.15s ease-out;
+}
+.details-head {
+  display: flex;
+  align-items: center;
+  height: 52px;
+  padding: 0 12px 0 18px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+.details-body {
+  padding: 6px 18px 24px;
+}
+.detail {
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border);
+}
+.detail:last-child {
+  border-bottom: 0;
+}
+.detail-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 7px;
+}
+.detail-link {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text);
+}
+.branch-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+  min-width: 0;
+}
+.file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 -8px;
+}
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+  min-width: 0;
+}
+.file-item:hover {
+  background: var(--surface-2);
+}
+
+/* На узких экранах «Детали» выезжают поверх контента */
+@media (max-width: 1179px) {
+  .details {
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 70;
+    box-shadow: var(--shadow-lg);
+    max-width: 88vw;
+  }
+}
+@media (max-width: 860px) {
+  .desktop-only {
+    display: none !important;
+  }
+  .session-header-inner {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  .session-header-inner .session-title {
+    max-width: none;
+    flex: 1;
+  }
+  .session-header .tab {
+    padding: 4px 8px;
+  }
+  .session-header .tab svg {
+    display: none;
+  }
+}
+
+.details-backdrop {
+  display: none;
+}
+@media (max-width: 1179px) {
+  .details-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 65;
+    background: rgba(10, 10, 12, 0.3);
+    animation: fade 0.15s ease-out;
+  }
+}
+@media (max-width: 860px) {
+  .hide-sm {
+    display: none !important;
+  }
+  .session-header-inner {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .session-header-inner .session-title {
+    flex: 1 0 100%;
+    order: -1;
+  }
+  .session-header-inner .badge {
+    display: none;
+  }
+  .session-header .tabs {
+    margin-left: 0;
   }
 }

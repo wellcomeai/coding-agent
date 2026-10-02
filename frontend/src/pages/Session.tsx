@@ -1,19 +1,24 @@
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowUp,
   ChevronDown,
   ChevronRight,
   ExternalLink,
   FileDiff,
+  FileText,
   GitBranch,
   GitPullRequest,
   Loader2,
   MessageSquare,
   MoreHorizontal,
+  PanelRightClose,
+  PanelRightOpen,
   RefreshCw,
   Sparkles,
   Square,
   Trash2,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -23,7 +28,7 @@ import { useApp } from "../App";
 import AutoTextarea from "../components/AutoTextarea";
 import { DiffView, parsePatch } from "../components/Diff";
 import StepsGroup, { ToolItem } from "../components/Steps";
-import { GitHubMark, Logo, useOutside, useToast } from "../components/ui";
+import { GitHubMark, Logo, useMedia, useOutside, useStoredFlag, useToast } from "../components/ui";
 import { modelLabel, rub } from "../lib/format";
 
 type Item =
@@ -87,6 +92,11 @@ function Md({ text, caret }: { text: string; caret?: boolean }) {
 
 export default function SessionView({ id }: { id: string }) {
   const { me, refreshMe, refreshSessions, openTopUp } = useApp();
+  const wide = useMedia("(min-width: 1180px)");
+  const [detailsPref, setDetailsPref] = useStoredFlag("sessionDetails", true);
+  const [detailsMobile, setDetailsMobile] = useState(false);
+  const details = wide ? detailsPref : detailsMobile;
+  const setDetails = wide ? setDetailsPref : setDetailsMobile;
   const toast = useToast();
   const [info, setInfo] = useState<SessionInfo | null>(null);
   const [items, setItems] = useState<Item[]>([]);
@@ -190,81 +200,75 @@ export default function SessionView({ id }: { id: string }) {
         }
       }
     });
-    return set.size;
+    return [...set];
   }, [items]);
 
   return (
-    <div className="session-wrap">
+    <div className={"session-layout" + (details ? " with-details" : "")}>
+      <div className="session-wrap">
       <header className="session-header">
         <div className="session-header-inner">
-          <div className="row" style={{ gap: 12 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <h1 className="session-title ellipsis">{info?.title ?? " "}</h1>
-              {info && (
-                <div className="row wrap" style={{ gap: 6, marginTop: 6 }}>
-                  <a className="chip hide-sm" href={`https://github.com/${info.repo_full_name}`} target="_blank" rel="noreferrer">
-                    <GitHubMark size={12} /> {info.repo_full_name}
-                  </a>
-                  <a className="chip" href={info.branch_url} target="_blank" rel="noreferrer">
-                    <GitBranch size={12} /> {info.base_branch} → {info.work_branch}
-                  </a>
-                  <span className="chip hide-sm">
-                    <Sparkles size={12} /> {modelLabel(info.model)}
-                  </span>
-                </div>
-              )}
-            </div>
-            {running ? (
-              <span className="badge accent">
-                <Loader2 size={12} className="spin" /> Работает
-              </span>
-            ) : info?.status === "error" ? (
-              <span className="badge danger">Ошибка</span>
-            ) : null}
-            {info?.pr_url ? (
-              <a className="btn sm" href={info.pr_url} target="_blank" rel="noreferrer">
-                <GitPullRequest size={14} /> Открыть PR
-              </a>
-            ) : (
-              info &&
-              items.length > 0 && (
-                <button className="btn sm" disabled={running} onClick={() => send("Закоммить изменения и открой pull request.")}>
-                  <GitPullRequest size={14} /> Создать PR
-                </button>
-              )
-            )}
-            <div style={{ position: "relative" }} ref={menuRef}>
-              <button className="btn ghost icon sm" onClick={() => setMenu((m) => !m)} aria-label="Ещё">
-                <MoreHorizontal size={16} />
-              </button>
-              {menu && info && (
-                <div className="popover" style={{ right: 0, top: "calc(100% + 6px)" }}>
-                  <a className="menu-item" href={info.branch_url} target="_blank" rel="noreferrer">
-                    <GitBranch size={15} /> Ветка на GitHub
-                  </a>
-                  <a
-                    className="menu-item"
-                    href={`https://github.com/${info.repo_full_name}/compare/${info.base_branch}...${info.work_branch}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <ExternalLink size={15} /> Сравнение веток
-                  </a>
-                  <div className="divider" />
-                  <button className="menu-item" style={{ color: "var(--danger)" }} onClick={remove}>
-                    <Trash2 size={15} /> Удалить сессию
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
+          <h1 className="session-title ellipsis" title={info?.title}>
+            {info?.title ?? " "}
+          </h1>
+          {running && (
+            <span className="badge accent">
+              <Loader2 size={12} className="spin" /> Работает
+            </span>
+          )}
+          {!running && info?.status === "error" && <span className="badge danger">Ошибка</span>}
           <div className="tabs">
             <button className={"tab" + (tab === "chat" ? " active" : "")} onClick={() => setTab("chat")}>
               <MessageSquare size={15} /> Чат
             </button>
             <button className={"tab" + (tab === "changes" ? " active" : "")} onClick={() => setTab("changes")}>
-              <FileDiff size={15} /> Изменения {changedFiles > 0 && <span className="count">{changedFiles}</span>}
+              <FileDiff size={15} /> Изменения {changedFiles.length > 0 && <span className="count">{changedFiles.length}</span>}
             </button>
+          </div>
+          <div className="spacer" />
+          {info?.pr_url ? (
+            <a className="btn sm" href={info.pr_url} target="_blank" rel="noreferrer">
+              <GitPullRequest size={14} /> <span className="hide-sm">Открыть PR</span>
+            </a>
+          ) : (
+            info &&
+            items.length > 0 && (
+              <button className="btn sm" disabled={running} onClick={() => send("Закоммить изменения и открой pull request.")}>
+                <GitPullRequest size={14} /> <span className="hide-sm">Создать PR</span>
+              </button>
+            )
+          )}
+          <button
+            className={"btn ghost icon sm" + (details ? " pressed" : "")}
+            onClick={() => setDetails((d) => !d)}
+            title={details ? "Скрыть детали" : "Показать детали"}
+            aria-label="Детали сессии"
+          >
+            {details ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
+          </button>
+          <div style={{ position: "relative" }} ref={menuRef}>
+            <button className="btn ghost icon sm" onClick={() => setMenu((m) => !m)} aria-label="Ещё">
+              <MoreHorizontal size={16} />
+            </button>
+            {menu && info && (
+              <div className="popover" style={{ right: 0, top: "calc(100% + 6px)" }}>
+                <a className="menu-item" href={info.branch_url} target="_blank" rel="noreferrer">
+                  <GitBranch size={15} /> Ветка на GitHub
+                </a>
+                <a
+                  className="menu-item"
+                  href={`https://github.com/${info.repo_full_name}/compare/${info.base_branch}...${info.work_branch}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <ExternalLink size={15} /> Сравнение веток
+                </a>
+                <div className="divider" />
+                <button className="menu-item" style={{ color: "var(--danger)" }} onClick={remove}>
+                  <Trash2 size={15} /> Удалить сессию
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -385,7 +389,124 @@ export default function SessionView({ id }: { id: string }) {
           </div>
         </div>
       </div>
+      </div>
+      {details && info && (
+        <DetailsPanel
+          info={info}
+          running={running}
+          cost={cost}
+          files={changedFiles}
+          onClose={() => setDetails(false)}
+          onOpenChanges={() => setTab("changes")}
+        />
+      )}
     </div>
+  );
+}
+
+function DetailsPanel({
+  info,
+  running,
+  cost,
+  files,
+  onClose,
+  onOpenChanges,
+}: {
+  info: SessionInfo;
+  running: boolean;
+  cost: number;
+  files: string[];
+  onClose: () => void;
+  onOpenChanges: () => void;
+}) {
+  const created = new Date(info.created_at).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+  return (
+    <>
+    <div className="details-backdrop" onClick={onClose} />
+    <aside className="details">
+      <div className="details-head">
+        <span style={{ fontWeight: 600 }}>Детали</span>
+        <div className="spacer" />
+        <button className="btn ghost icon sm" onClick={onClose} aria-label="Скрыть детали">
+          <X size={16} />
+        </button>
+      </div>
+      <div className="details-body">
+        <div className="detail">
+          <div className="detail-label">Статус</div>
+          {running ? (
+            <span className="badge accent">
+              <Loader2 size={12} className="spin" /> Работает
+            </span>
+          ) : info.status === "error" ? (
+            <span className="badge danger">Ошибка</span>
+          ) : info.pr_url ? (
+            <span className="badge success">PR открыт</span>
+          ) : (
+            <span className="badge">Ожидает задачу</span>
+          )}
+        </div>
+        <div className="detail">
+          <div className="detail-label">Репозиторий</div>
+          <a className="detail-link" href={`https://github.com/${info.repo_full_name}`} target="_blank" rel="noreferrer">
+            <GitHubMark size={14} /> <span className="ellipsis">{info.repo_full_name}</span>
+          </a>
+        </div>
+        <div className="detail">
+          <div className="detail-label">Ветки</div>
+          <div className="branch-flow">
+            <span className="mono ellipsis" title={info.base_branch}>
+              {info.base_branch}
+            </span>
+            <ArrowDown size={13} className="faint" />
+            <a className="mono ellipsis" href={info.branch_url} target="_blank" rel="noreferrer" title={info.work_branch}>
+              {info.work_branch}
+            </a>
+          </div>
+        </div>
+        {info.pr_url && (
+          <div className="detail">
+            <div className="detail-label">Pull request</div>
+            <a className="detail-link" href={info.pr_url} target="_blank" rel="noreferrer">
+              <GitPullRequest size={14} /> <span className="ellipsis">#{info.pr_url.split("/").pop()}</span>
+              <ExternalLink size={12} className="faint" />
+            </a>
+          </div>
+        )}
+        <div className="detail">
+          <div className="detail-label">Модель</div>
+          <div className="row">
+            <Sparkles size={14} className="faint" /> {modelLabel(info.model)}
+          </div>
+        </div>
+        <div className="detail">
+          <div className="detail-label">Потрачено</div>
+          <div style={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{rub(cost)}</div>
+        </div>
+        <div className="detail">
+          <div className="detail-label">Создана</div>
+          <div className="muted">{created}</div>
+        </div>
+        <div className="detail">
+          <div className="detail-label">
+            Изменённые файлы {files.length > 0 && <span className="faint">· {files.length}</span>}
+          </div>
+          {files.length === 0 ? (
+            <div className="faint small">Пока нет изменений</div>
+          ) : (
+            <div className="file-list">
+              {files.map((f) => (
+                <button key={f} className="file-item" onClick={onOpenChanges} title={f}>
+                  <FileText size={13} className="faint" />
+                  <span className="mono ellipsis">{f}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </aside>
+    </>
   );
 }
 
