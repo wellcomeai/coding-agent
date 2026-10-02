@@ -41,6 +41,17 @@ def test_compact_history_shrinks_old_tool_results():
     assert len(hist[-1]["content"]) == 10_000  # свежие не трогаем
 
 
+def test_compact_history_keeps_prefix_stable_between_steps():
+    """После сжатия следующие шаги не трогают старую часть истории, иначе кэш промпта сбрасывается каждый раз."""
+    hist, changed = [], 0
+    for i in range(120):
+        hist.append({"role": "tool", "tool_call_id": str(i), "content": "z" * 8000})
+        before = [m["content"] for m in hist]
+        compact_history(hist, budget=350_000)
+        changed += [m["content"] for m in hist] != before
+    assert changed <= 6
+
+
 def test_close_dangling_tool_calls():
     hist = [{"role": "assistant", "content": None, "tool_calls": [{"id": "a"}, {"id": "b"}]},
             {"role": "tool", "tool_call_id": "a", "content": "ok"}]

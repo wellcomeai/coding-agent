@@ -1,4 +1,5 @@
-"""Клиент LLM через Timeweb AI Gateway (OpenAI-совместимый chat/completions со стримингом и tool calling)."""
+"""Клиент LLM через Timeweb AI Gateway (OpenAI-совместимый chat/completions с tool calling;
+стриминг включается настройкой llm_stream)."""
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -52,25 +53,41 @@ class GatewayLLM(LLMClient):
 
     async def complete(self, model, messages, tools, on_delta=None) -> LLMResult:
         s = get_settings()
+        params = dict(model=model, messages=messages, tools=tools or None, max_tokens=s.agent_max_output_tokens)
+        if s.llm_stream:
+            result = await self._complete_stream(params, on_delta)
+        else:
+            result = await self._complete_once(params)
+        if not result.usage.prompt_tokens and not result.usage.completion_tokens:
+            # Gateway не вернул usage — оцениваем грубо (≈3.5 символа на токен), чтобы не работать бесплатно
+            prompt_chars = sum(len(str(m.get("content") or "")) + len(str(m.get("tool_calls") or "")) for m in messages)
+            out_chars = len(result.content) + sum(len(c["function"]["arguments"]) for c in result.tool_calls)
+            result.usage = Usage(int(prompt_chars / 3.5), int(out_chars / 3.5), estimated=True)
+        return result
+
+    async def _complete_once(self, params: dict) -> LLMResult:
+        resp = await self.client.chat.completions.create(**params)
+        result = LLMResult(usage=parse_usage(resp.usage))
+        if resp.choices:
+            choice = resp.choices[0]
+            result.finish_reason = choice.finish_reason
+            result.content = choice.message.content or ""
+            result.tool_calls = [
+                {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                for tc in choice.message.tool_calls or []
+                if getattr(tc, "function", None)
+            ]
+        return _finalize_tool_calls(result)
+
+    async def _complete_stream(self, params: dict, on_delta) -> LLMResult:
         stream = await self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            tools=tools or None,
-            max_tokens=s.agent_max_output_tokens,
-            stream=True,
-            stream_options={"include_usage": True},
+            **params, stream=True, stream_options={"include_usage": True}
         )
         result = LLMResult()
         calls: dict[int, dict] = {}
         async for chunk in stream:
             if chunk.usage:
-                u = chunk.usage
-                details = getattr(u, "prompt_tokens_details", None)
-                result.usage = Usage(
-                    prompt_tokens=u.prompt_tokens or 0,
-                    completion_tokens=u.completion_tokens or 0,
-                    cached_tokens=(getattr(details, "cached_tokens", 0) or 0) if details else 0,
-                )
+                result.usage = parse_usage(chunk.usage)
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
@@ -93,15 +110,26 @@ class GatewayLLM(LLMClient):
                     if tc.function.arguments:
                         slot["function"]["arguments"] += tc.function.arguments
         result.tool_calls = [calls[i] for i in sorted(calls)]
-        for i, c in enumerate(result.tool_calls):
-            c["id"] = c["id"] or f"call_{i}"
-            c["function"]["arguments"] = c["function"]["arguments"] or "{}"
-        if not result.usage.prompt_tokens and not result.usage.completion_tokens:
-            # Gateway не вернул usage — оцениваем грубо (≈3.5 символа на токен), чтобы не работать бесплатно
-            prompt_chars = sum(len(str(m.get("content") or "")) + len(str(m.get("tool_calls") or "")) for m in messages)
-            out_chars = len(result.content) + sum(len(c["function"]["arguments"]) for c in result.tool_calls)
-            result.usage = Usage(int(prompt_chars / 3.5), int(out_chars / 3.5), estimated=True)
-        return result
+        return _finalize_tool_calls(result)
+
+
+def parse_usage(u) -> Usage:
+    """usage в формате OpenAI; кэш берём из prompt_tokens_details или из полей DeepSeek (prompt_cache_hit_tokens)."""
+    if not u:
+        return Usage()
+    details = getattr(u, "prompt_tokens_details", None)
+    cached = (getattr(details, "cached_tokens", 0) or 0) if details else 0
+    if not cached:
+        extra = getattr(u, "model_extra", None) or {}
+        cached = extra.get("prompt_cache_hit_tokens") or 0
+    return Usage(prompt_tokens=u.prompt_tokens or 0, completion_tokens=u.completion_tokens or 0, cached_tokens=int(cached))
+
+
+def _finalize_tool_calls(result: LLMResult) -> LLMResult:
+    for i, c in enumerate(result.tool_calls):
+        c["id"] = c["id"] or f"call_{i}"
+        c["function"]["arguments"] = c["function"]["arguments"] or "{}"
+    return result
 
 
 _llm: LLMClient | None = None

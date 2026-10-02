@@ -1,8 +1,10 @@
 """Инструменты агента. Секреты (GitHub/Timeweb) никогда не попадают в контекст LLM:
 инструменты выполняет сервер, подставляя токены сам."""
 
+import asyncio
 import base64
 import json
+import time
 import logging
 import posixpath
 import shlex
@@ -374,6 +376,45 @@ async def t_timeweb_app_status(ctx: ToolContext, app_id: str) -> str:
     )
 
 
+# Ожидание выполняет сервер: модель не вызывается на каждой проверке, и долгий деплой не стоит десятков шагов.
+WAIT_POLL_SECONDS = 15
+WAIT_MAX_MINUTES = 25
+DEPLOY_DONE = {"success", "failure", "failed", "error", "stopped", "canceled", "cancelled"}
+
+
+def _wait_deadline(timeout_minutes: float) -> float:
+    return time.monotonic() + max(1.0, min(float(timeout_minutes), WAIT_MAX_MINUTES)) * 60
+
+
+async def t_timeweb_wait_deploy(
+    ctx: ToolContext, app_id: str, deploy_id: str | None = None, timeout_minutes: float = 15
+) -> str:
+    tw = _tw(ctx)
+    deadline = _wait_deadline(timeout_minutes)
+    while True:
+        deploys = await tw.list_deploys(str(app_id), 10)
+        d = next((x for x in deploys if str(x.get("id")) == str(deploy_id)), None) if deploy_id else (deploys or [None])[0]
+        status = (d or {}).get("status")
+        done = bool(d) and (status in DEPLOY_DONE or bool(d.get("ended_at")))
+        if done or time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(WAIT_POLL_SECONDS)
+    if not d:
+        raise ToolError(f"Деплой {deploy_id} не найден у приложения {app_id}" if deploy_id else f"У приложения {app_id} нет деплоев")
+    app = await tw.get_app(str(app_id))
+    out: dict[str, Any] = {
+        "finished": done,
+        "deploy": {k: d.get(k) for k in ("id", "status", "commit_sha", "started_at", "ended_at")},
+        "app": _short_app(app),
+    }
+    if not done:
+        out["note"] = "Деплой ещё идёт. Можно подождать ещё раз тем же инструментом."
+    elif status != "success":
+        logs = await tw.deploy_logs(str(app_id), str(d["id"]))
+        out["deploy_logs_tail"] = truncate("\n".join(logs[-80:]) or "Логи пусты", 8000)
+    return json.dumps(out, ensure_ascii=False)
+
+
 async def t_timeweb_deploy_logs(ctx: ToolContext, app_id: str, deploy_id: str | None = None) -> str:
     tw = _tw(ctx)
     if not deploy_id:
@@ -497,6 +538,21 @@ async def t_timeweb_database_status(ctx: ToolContext, database_id: int) -> str:
         info["note"] = (
             "База создана не через агента — пароль неизвестен. Подключить её автоматически нельзя: "
             "пользователь может добавить строку подключения вручную в панели Timeweb."
+        )
+    return json.dumps(info, ensure_ascii=False)
+
+
+async def t_timeweb_wait_database(ctx: ToolContext, database_id: int, timeout_minutes: float = 15) -> str:
+    deadline = _wait_deadline(timeout_minutes)
+    while True:
+        info = json.loads(await t_timeweb_database_status(ctx, database_id))
+        if info["ready"] or time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(WAIT_POLL_SECONDS)
+    if not info["ready"]:
+        info["note"] = (
+            "База ещё не готова (статус started и публичный IP). Можно подождать ещё раз тем же инструментом; "
+            "если статус started, а IP так и не появился, сообщите пользователю."
         )
     return json.dumps(info, ensure_ascii=False)
 
@@ -676,6 +732,20 @@ TIMEWEB_TOOLS: list[tuple[dict, Callable]] = [
     (_fn("timeweb_app_logs", "Get runtime logs of the app.", {"app_id": S}, ["app_id"]), t_timeweb_app_logs),
     (
         _fn(
+            "timeweb_wait_deploy",
+            "Wait on the server until a deploy finishes (polls Timeweb itself, up to timeout_minutes, max 25) and "
+            "return its final status; on failure includes the tail of the build log. Use instead of sleep loops.",
+            {
+                "app_id": S,
+                "deploy_id": {**S, "description": "from timeweb_deploy; default — the latest deploy"},
+                "timeout_minutes": I,
+            },
+            ["app_id"],
+        ),
+        t_timeweb_wait_deploy,
+    ),
+    (
+        _fn(
             "timeweb_db_options",
             "List managed database types (versions) and tariffs with monthly price in RUB.",
             {
@@ -710,6 +780,16 @@ TIMEWEB_TOOLS: list[tuple[dict, Callable]] = [
             ["database_id"],
         ),
         t_timeweb_database_status,
+    ),
+    (
+        _fn(
+            "timeweb_wait_database",
+            "Wait on the server until a database is ready to connect (status started and public IP), up to "
+            "timeout_minutes (max 25). Use instead of sleep loops.",
+            {"database_id": I, "timeout_minutes": I},
+            ["database_id"],
+        ),
+        t_timeweb_wait_database,
     ),
     (
         _fn(

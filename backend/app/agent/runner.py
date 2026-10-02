@@ -23,6 +23,9 @@ from .prompts import build_system_prompt
 log = logging.getLogger(__name__)
 
 HISTORY_CHAR_BUDGET = 350_000
+# Сжимаем с запасом: до 60% бюджета, а не впритык. Иначе история снова переполняется на следующем шаге,
+# сжатие правит очередное старое сообщение и сбрасывает кэш промпта почти на каждом вызове модели.
+COMPACT_TARGET = 0.6
 KEEP_RECENT = 8
 
 
@@ -35,8 +38,9 @@ def compact_history(history: list[dict], budget: int = HISTORY_CHAR_BUDGET) -> l
     total = sum(size(m) for m in history)
     if total <= budget:
         return history
+    target = int(budget * COMPACT_TARGET)
     for m in history[: max(0, len(history) - KEEP_RECENT)]:
-        if total <= budget:
+        if total <= target:
             break
         if m.get("role") == "tool" and len(m.get("content") or "") > 600:
             before = size(m)

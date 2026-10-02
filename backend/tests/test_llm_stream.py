@@ -19,7 +19,11 @@ def chunk(delta=None, finish=None, usage=None):
     return c
 
 
-async def test_stream_assembles_text_tool_calls_and_usage():
+async def test_stream_assembles_text_tool_calls_and_usage(monkeypatch):
+    from app import config
+
+    monkeypatch.setenv("LLM_STREAM", "true")
+    config.get_settings.cache_clear()
     body = sse(
         chunk({"role": "assistant", "content": "Смотрю "}),
         chunk({"content": "код"}),
@@ -52,3 +56,31 @@ async def test_stream_assembles_text_tool_calls_and_usage():
     assert json.loads(res.tool_calls[0]["function"]["arguments"]) == {"path": "a.py"}
     assert (res.usage.prompt_tokens, res.usage.completion_tokens, res.usage.cached_tokens) == (120, 30, 100)
     assert res.as_message()["tool_calls"][1]["id"] == "call_2"
+
+
+async def test_non_stream_reads_cached_tokens_including_deepseek_fields(monkeypatch):
+    # В режиме stream Timeweb AI Gateway не отдаёт кэш, поэтому по умолчанию вызов без стриминга.
+    from app import config
+
+    config.get_settings.cache_clear()
+    monkeypatch.delenv("LLM_STREAM", raising=False)
+    captured = {}
+    usage = {"prompt_tokens": 9093, "completion_tokens": 30, "total_tokens": 9123,
+             "prompt_cache_hit_tokens": 9088, "prompt_cache_miss_tokens": 5}
+    body = {"id": "x", "object": "chat.completion", "created": 0, "model": "m", "usage": usage,
+            "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
+                "role": "assistant", "content": "Смотрю",
+                "tool_calls": [{"id": "", "type": "function", "function": {"name": "bash", "arguments": ""}}]}}]}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json=body)
+
+    llm = GatewayLLM()
+    llm.client = AsyncOpenAI(api_key="k", base_url="http://gw/v1", http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    res = await llm.complete("deepseek/deepseek-v4-pro", [{"role": "user", "content": "hi"}], [])
+
+    assert "stream" not in captured
+    assert res.content == "Смотрю" and res.finish_reason == "tool_calls"
+    assert res.tool_calls == [{"id": "call_0", "type": "function", "function": {"name": "bash", "arguments": "{}"}}]
+    assert (res.usage.prompt_tokens, res.usage.completion_tokens, res.usage.cached_tokens) == (9093, 30, 9088)

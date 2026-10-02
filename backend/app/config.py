@@ -46,7 +46,11 @@ class Settings(BaseSettings):
     default_model: str = "anthropic/claude-sonnet-5"
     agent_max_steps: int = 80
     agent_max_output_tokens: int = 16000
-    llm_timeout_seconds: int = 300
+    # Без стриминга ответ приходит целиком, поэтому таймаут должен покрывать всю генерацию.
+    llm_timeout_seconds: int = 900
+    # Стриминг выключен: в режиме stream Timeweb AI Gateway не возвращает cached_tokens,
+    # и кэшированный вход списывался бы по полной цене.
+    llm_stream: bool = False
 
     # --- Биллинг ---
     # Наш токен Timeweb Cloud: используется для загрузки прайса моделей Cloud AI
