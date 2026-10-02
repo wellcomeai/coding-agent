@@ -57,7 +57,7 @@ async def timeweb_status(user: User = Depends(current_user)):
 
 @router.get("/timeweb/databases")
 async def my_databases(user: User = Depends(current_user)):
-    """Базы, созданные агентом, с актуальным статусом из Timeweb."""
+    """Базы, к которым у сервиса есть пароль (добавлены в Настройках или созданы агентом), со статусом из Timeweb."""
     records = await timeweb_db.list_records(user.id)
     token = decrypt(user.timeweb_token_enc)
     client = TimewebClient(token) if token else None
@@ -73,6 +73,86 @@ async def my_databases(user: User = Depends(current_user)):
                 item["status"] = "deleted" if e.status == 404 else f"ошибка {e.status}"
         out.append(item)
     return {"databases": out}
+
+
+def _tw_client(user: User) -> TimewebClient:
+    token = decrypt(user.timeweb_token_enc)
+    if not token:
+        raise HTTPException(400, "Сначала подключите Timeweb Cloud")
+    return TimewebClient(token)
+
+
+@router.get("/timeweb/databases/available")
+async def available_databases(user: User = Depends(current_user)):
+    """Все базы аккаунта Timeweb — чтобы выбрать созданную вручную и добавить её пароль."""
+    client = _tw_client(user)
+    added = {r.cluster_id for r in await timeweb_db.list_records(user.id)}
+    try:
+        dbs = await client.list_databases()
+    except TimewebError as e:
+        raise HTTPException(502, str(e)) from e
+    return {
+        "databases": [
+            {"id": d.get("id"), "name": d.get("name"), "type": d.get("type"), "status": d.get("status"),
+             "location": d.get("location"), "public_ip": db_public_ip(d), "added": d.get("id") in added}
+            for d in dbs
+        ]
+    }
+
+
+class AddDatabase(BaseModel):
+    cluster_id: int
+    password: str = Field(min_length=1, max_length=500)
+    login: str | None = Field(default=None, max_length=100)
+    db_name: str | None = Field(default=None, max_length=255)
+
+
+async def _check_postgres(host: str, port: int, login: str, password: str, db_name: str) -> str | None:
+    """Проверить, что с этим паролем можно подключиться. None — всё хорошо, иначе текст ошибки."""
+    import asyncpg
+
+    try:
+        conn = await asyncpg.connect(host=host, port=port, user=login, password=password, database=db_name, timeout=10)
+    except Exception as e:  # noqa: BLE001
+        return f"{e.__class__.__name__}: {e}"[:300]
+    await conn.close()
+    return None
+
+
+@router.post("/timeweb/databases")
+async def add_database(body: AddDatabase, user: User = Depends(current_user)):
+    """Добавить базу, созданную вручную в панели Timeweb: агент сможет подключить её к приложению,
+    а пароль не попадёт в чат."""
+    client = _tw_client(user)
+    try:
+        live = await client.get_database(body.cluster_id)
+        login = body.login or next((a.get("login") for a in await client.list_db_admins(body.cluster_id)), None)
+        db_name = body.db_name or next((i.get("name") for i in await client.list_db_instances(body.cluster_id)), None)
+    except TimewebError as e:
+        raise HTTPException(404 if e.status == 404 else 502, f"База не найдена в вашем аккаунте Timeweb: {e}") from e
+    if not login or not db_name:
+        raise HTTPException(400, "Не удалось определить пользователя или имя базы — укажите их вручную")
+    await timeweb_db.upsert(user.id, body.cluster_id, live.get("name") or str(body.cluster_id),
+                            live.get("type") or "", db_name, login, body.password.strip())
+    host, port = db_public_ip(live), int(live.get("port") or 5432)
+    out = {"ok": True, "id": body.cluster_id, "name": live.get("name"), "user": login, "db_name": db_name,
+           "public_ip": host, "check": None}
+    if not host:
+        out["warning"] = "У базы нет публичного IP — включите его в панели Timeweb, иначе приложение её не увидит."
+    elif (live.get("type") or "").startswith("postgres") and live.get("status") == "started":
+        if err := await _check_postgres(host, port, login, body.password.strip(), db_name):
+            out["warning"] = f"Не удалось подключиться с этим паролем: {err}"
+        else:
+            out["check"] = "ok"
+    return out
+
+
+@router.delete("/timeweb/databases/{cluster_id}")
+async def forget_database(cluster_id: int, user: User = Depends(current_user)):
+    """Убрать базу из сервиса (забыть пароль). Сама база в Timeweb не удаляется."""
+    if not await timeweb_db.delete(user.id, cluster_id):
+        raise HTTPException(404, "База не найдена")
+    return {"ok": True}
 
 
 @router.post("/timeweb/databases/{cluster_id}/connection")

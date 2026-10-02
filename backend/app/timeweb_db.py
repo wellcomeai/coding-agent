@@ -1,10 +1,9 @@
-"""Управляемые БД Timeweb, созданные агентом: генерация доступов, хранение и строка подключения.
+"""Управляемые БД Timeweb, к которым у сервиса есть пароль: созданные агентом или добавленные пользователем
+в Настройках. Генерация доступов, хранение и строка подключения.
 
 Пароль генерирует сервер и хранит зашифрованным; в контекст LLM он не попадает.
 """
 
-import secrets
-import string
 from urllib.parse import quote
 
 from sqlalchemy import select
@@ -23,30 +22,6 @@ PRIVILEGES = {
 }
 
 
-def generate_password(length: int = 28) -> str:
-    """Только буквы и цифры — без экранирования в URL и ENV."""
-    alphabet = string.ascii_letters + string.digits
-    while True:
-        pw = "".join(secrets.choice(alphabet) for _ in range(length))
-        if any(c.isdigit() for c in pw) and any(c.islower() for c in pw) and any(c.isupper() for c in pw):
-            return pw
-
-
-def generate_login() -> str:
-    return "app_" + secrets.token_hex(3)
-
-
-def create_payload(name: str, db_type: str, preset_id: int, db_name: str, login: str, password: str) -> dict:
-    family = db_family(db_type)
-    payload: dict = {"name": name, "type": db_type, "preset_id": int(preset_id)}
-    if family in ("postgres", "mysql"):
-        payload["admin"] = {"login": login, "password": password, "host": "%", "privileges": PRIVILEGES[family]}
-        payload["instance"] = {"name": db_name}
-    else:
-        payload["admin"] = {"login": login, "password": password}
-    return payload
-
-
 async def save(user_id: int, cluster_id: int, name: str, db_type: str, db_name: str, login: str, password: str) -> None:
     async with session_factory()() as db:
         db.add(
@@ -61,6 +36,40 @@ async def save(user_id: int, cluster_id: int, name: str, db_type: str, db_name: 
             )
         )
         await db.commit()
+
+
+async def upsert(user_id: int, cluster_id: int, name: str, db_type: str, db_name: str, login: str, password: str) -> None:
+    """Добавить или обновить базу, которую пользователь создал сам в панели Timeweb."""
+    async with session_factory()() as db:
+        rec = (
+            await db.execute(
+                select(TimewebDatabase).where(
+                    TimewebDatabase.user_id == user_id, TimewebDatabase.cluster_id == int(cluster_id)
+                )
+            )
+        ).scalar_one_or_none()
+        if rec is None:
+            rec = TimewebDatabase(user_id=user_id, cluster_id=int(cluster_id))
+            db.add(rec)
+        rec.name, rec.db_type, rec.db_name, rec.login = name, db_type, db_name, login
+        rec.password_enc = encrypt(password)
+        await db.commit()
+
+
+async def delete(user_id: int, cluster_id: int) -> bool:
+    async with session_factory()() as db:
+        rec = (
+            await db.execute(
+                select(TimewebDatabase).where(
+                    TimewebDatabase.user_id == user_id, TimewebDatabase.cluster_id == int(cluster_id)
+                )
+            )
+        ).scalar_one_or_none()
+        if not rec:
+            return False
+        await db.delete(rec)
+        await db.commit()
+        return True
 
 
 async def get_record(user_id: int, cluster_id: int) -> TimewebDatabase | None:

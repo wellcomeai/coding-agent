@@ -483,27 +483,8 @@ def _short_db(d: dict, managed: bool) -> dict:
         "location": d.get("location"),
         "public_ip": db_public_ip(d),
         "port": d.get("port"),
-        "created_by_agent": managed,
+        "password_in_settings": managed,
     }
-
-
-async def t_timeweb_db_options(ctx: ToolContext, db_family_name: str = "postgres", location: str | None = None) -> str:
-    tw = _tw(ctx)
-    fam = db_family_name.lower()
-    types = [
-        {"type": t.get("type"), "version": t.get("version")}
-        for t in await tw.db_types()
-        if db_family(t.get("type", "")) == fam and not t.get("is_deprecated")
-    ]
-    presets = [
-        {k: p.get(k) for k in ("id", "description_short", "price", "cpu", "ram", "disk", "location")}
-        for p in await tw.db_presets()
-        if db_family(p.get("type", "")) == fam and (not location or p.get("location") == location)
-    ]
-    presets.sort(key=lambda p: (p.get("location") or "", p.get("price") or 0))
-    return truncate(
-        json.dumps({"types": types, "presets (price — руб./мес.)": presets[:40]}, ensure_ascii=False), 15000
-    )
 
 
 async def t_timeweb_list_databases(ctx: ToolContext) -> str:
@@ -515,31 +496,6 @@ async def t_timeweb_list_databases(ctx: ToolContext) -> str:
     return json.dumps([_short_db(d, d.get("id") in managed) for d in dbs], ensure_ascii=False)
 
 
-async def t_timeweb_create_database(
-    ctx: ToolContext, name: str, db_type: str, preset_id: int, confirmed: bool, db_name: str = "app"
-) -> str:
-    if not confirmed:
-        raise ToolError("Создание базы данных платное. Сначала покажите тариф с ценой и получите согласие пользователя.")
-    tw = _tw(ctx)
-    login = timeweb_db.generate_login()
-    password = timeweb_db.generate_password()
-    ctx.secrets.append(password)
-    try:
-        created = await tw.create_database(timeweb_db.create_payload(name, db_type, preset_id, db_name, login, password))
-    except TimewebError as e:
-        raise ToolError(f"Timeweb не создал базу: {e}") from e
-    cluster_id = created.get("id")
-    if not cluster_id:
-        raise ToolError(f"Timeweb не вернул ID базы: {truncate(json.dumps(created, ensure_ascii=False), 1000)}")
-    await timeweb_db.save(ctx.user_id, cluster_id, name, db_type, db_name, login, password)
-    return (
-        f"База создаётся: id={cluster_id}, тип {db_type}, база «{db_name}», пользователь {login}. "
-        "Пароль сгенерирован и сохранён на сервере (вам он не нужен). Дождитесь готовности через "
-        "timeweb_wait_database (он же включит публичный IP и выдаст права), затем подключите к приложению: "
-        "timeweb_connect_database или timeweb_create_app с database_id."
-    )
-
-
 async def t_timeweb_database_status(ctx: ToolContext, database_id: int) -> str:
     tw = _tw(ctx)
     d = await tw.get_database(int(database_id))
@@ -548,8 +504,8 @@ async def t_timeweb_database_status(ctx: ToolContext, database_id: int) -> str:
     info["ready"] = d.get("status") == "started" and bool(info["public_ip"])
     if not rec:
         info["note"] = (
-            "База создана не через агента — пароль неизвестен. Подключить её автоматически нельзя: "
-            "пользователь может добавить строку подключения вручную в панели Timeweb."
+            "Пароль этой базы сервису неизвестен. Попросите пользователя добавить её в Настройках → Базы данных "
+            "(выбрать базу и ввести пароль). Пароль в чате не спрашивайте."
         )
     return json.dumps(info, ensure_ascii=False)
 
@@ -650,7 +606,7 @@ async def t_timeweb_fix_database_access(ctx: ToolContext, database_id: int, conf
     rec = await timeweb_db.get_record(ctx.user_id, int(database_id))
     if not rec and not confirmed:
         raise ToolError(
-            "База создана не через агента: включение публичного IP платное. Сначала получите согласие пользователя."
+            "База не добавлена в Настройках: включение публичного IP платное. Сначала получите согласие пользователя."
         )
     return json.dumps(await _prepare_database(ctx, database_id, timeout_minutes=10), ensure_ascii=False)
 
@@ -678,8 +634,8 @@ async def _db_envs(ctx: ToolContext, database_id: int, mode: str, env_name: str,
     rec = await timeweb_db.get_record(ctx.user_id, int(database_id))
     if not rec:
         raise ToolError(
-            "Эта база создана не через агента, её пароль неизвестен. Создайте базу через timeweb_create_database "
-            "или попросите пользователя добавить переменные подключения вручную в панели Timeweb."
+            "Пароль этой базы сервису неизвестен. Попросите пользователя добавить её в Настройках → Базы данных "
+            "(выбрать базу и ввести пароль), затем повторите. Пароль в чате не спрашивайте."
         )
     # Гарантия публичной базы: даже если агент не вызвал timeweb_wait_database, перед подключением включаем
     # публичный IP и повторно выдаём права
@@ -832,7 +788,7 @@ TIMEWEB_TOOLS: list[tuple[dict, Callable]] = [
                 "envs": {"type": "object", "description": "environment variables"},
                 "branch": {**S, "description": "branch to deploy, default: working branch"},
                 "is_auto_deploy": B,
-                "database_id": {**I, "description": "optional: id from timeweb_create_database to inject DB connection envs"},
+                "database_id": {**I, "description": "optional: id of a database added in Settings (password_in_settings) to inject DB connection envs"},
                 "database_mode": {"type": "string", "enum": ["url", "parts"]},
                 "database_env_name": {**S, "description": "default DATABASE_URL"},
                 "database_url_scheme": {**S, "description": "e.g. postgresql+asyncpg"},
@@ -868,33 +824,12 @@ TIMEWEB_TOOLS: list[tuple[dict, Callable]] = [
     ),
     (
         _fn(
-            "timeweb_db_options",
-            "List managed database types (versions) and tariffs with monthly price in RUB.",
-            {
-                "db_family_name": {"type": "string", "enum": ["postgres", "mysql", "valkey", "mongodb", "clickhouse"]},
-                "location": {**S, "description": "e.g. ru-1, ru-3 — pick the same location as the app"},
-            },
+            "timeweb_list_databases",
+            "List the user's managed databases in Timeweb. password_in_settings=true means the user added it in "
+            "Settings and it can be connected to an app.",
+            {},
         ),
-        t_timeweb_db_options,
-    ),
-    (_fn("timeweb_list_databases", "List the user's managed databases in Timeweb.", {}), t_timeweb_list_databases),
-    (
-        _fn(
-            "timeweb_create_database",
-            "Create a managed database (cluster + database + user). Credentials are generated and stored by the "
-            "server; you never see the password. The app reaches it via a public IP, which timeweb_wait_database "
-            "attaches automatically and which is billed separately by Timeweb. PAID: requires explicit user "
-            "confirmation of both the tariff and the public IP.",
-            {
-                "name": {**S, "description": "cluster name, e.g. myapp-db"},
-                "db_type": {**S, "description": "exact type from timeweb_db_options, e.g. postgres16"},
-                "preset_id": I,
-                "db_name": {**S, "description": "database name, default 'app'"},
-                "confirmed": {**B, "description": "true only if the user explicitly approved the paid tariff"},
-            },
-            ["name", "db_type", "preset_id", "confirmed"],
-        ),
-        t_timeweb_create_database,
+        t_timeweb_list_databases,
     ),
     (
         _fn(
@@ -909,8 +844,8 @@ TIMEWEB_TOOLS: list[tuple[dict, Callable]] = [
         _fn(
             "timeweb_wait_database",
             "Wait on the server until a database is ready to connect, up to timeout_minutes (max 25). For databases "
-            "created by timeweb_create_database it also enables the public IP and re-grants user privileges. Use "
-            "instead of sleep loops.",
+            "added in Settings it also makes sure the public IP is on and re-grants user privileges. Use instead of "
+            "sleep loops.",
             {"database_id": I, "timeout_minutes": I},
             ["database_id"],
         ),
@@ -920,9 +855,9 @@ TIMEWEB_TOOLS: list[tuple[dict, Callable]] = [
         _fn(
             "timeweb_fix_database_access",
             "Make a database reachable by apps: enable its public IP and re-grant user privileges (fixes Timeweb's "
-            "'User does not have CONNECT privilege'). Safe to repeat. For databases not created by "
-            "timeweb_create_database the public IP is PAID: pass confirmed=true only after the user agreed.",
-            {"database_id": I, "confirmed": {**B, "description": "needed only for databases not created by the agent"}},
+            "'User does not have CONNECT privilege'). Safe to repeat. For databases not added in Settings "
+            "the public IP is PAID: pass confirmed=true only after the user agreed.",
+            {"database_id": I, "confirmed": {**B, "description": "needed only for databases not added in Settings"}},
             ["database_id"],
         ),
         t_timeweb_fix_database_access,
@@ -930,7 +865,7 @@ TIMEWEB_TOOLS: list[tuple[dict, Callable]] = [
     (
         _fn(
             "timeweb_connect_database",
-            "Put connection settings of a database created by timeweb_create_database into an existing app's "
+            "Put connection settings of a database added in Settings into an existing app's "
             "environment variables (server inserts the password) and redeploy.",
             {
                 "app_id": S,

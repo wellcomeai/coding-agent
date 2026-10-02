@@ -137,21 +137,11 @@ class TimewebClient:
         return (await self.diagnose_repository(full_name)).match
 
     # --- Базы данных ---
-    async def db_types(self) -> list[dict]:
-        return (await self.request("GET", "/api/v1/database-types"))["types"]
-
-    async def db_presets(self) -> list[dict]:
-        return (await self.request("GET", "/api/v2/presets/dbs"))["databases_presets"]
-
     async def list_databases(self) -> list[dict]:
         return (await self.request("GET", "/api/v1/databases"))["dbs"]
 
     async def get_database(self, cluster_id: int) -> dict:
         body = await self.request("GET", f"/api/v1/databases/{cluster_id}")
-        return body.get("db") or body.get("database") or body
-
-    async def create_database(self, payload: dict) -> dict:
-        body = await self.request("POST", "/api/v1/databases", json=payload)
         return body.get("db") or body.get("database") or body
 
     async def update_database(self, cluster_id: int, payload: dict) -> dict:

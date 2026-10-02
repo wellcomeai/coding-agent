@@ -10,14 +10,14 @@ class DbFake(TimewebClient):
         super().__init__("token")
         self.app_envs = dict(app_envs or {})
         self.db_status, self.ip = db_status, ip
-        self.created = None
         self.patches = []
         self.deploys = []
 
     async def request(self, method, path, **kw):
-        if method == "POST" and path == "/api/v1/databases":
-            self.created = kw["json"]
-            return {"db": {"id": 777, "status": "creating"}}
+        if path == "/api/v1/databases" and method == "GET":
+            return {"dbs": [{"id": 777, "name": "shop-db", "type": "postgres16", "status": self.db_status, "location": "ru-3",
+                             "networks": [{"type": "public", "ips": [{"type": "ipv_4", "ip": self.ip}]}] if self.ip else []},
+                            {"id": 888, "name": "other-db", "type": "postgres16", "status": "started", "networks": []}]}
         if path == "/api/v1/databases/777":
             nets = [{"type": "public", "ips": [{"type": "ipv_4", "ip": self.ip}]}] if self.ip else []
             return {"db": {"id": 777, "name": "shop-db", "type": "postgres16", "status": self.db_status, "port": 5432, "networks": nets}}
@@ -62,39 +62,30 @@ async def _user():
         return u.id
 
 
+async def _agent_db(uid):
+    """База, которую пользователь создал в панели и добавил в Настройках (пароль известен сервису)."""
+    from app import timeweb_db
+
+    await timeweb_db.upsert(uid, 777, "shop-db", "postgres16", "app", "u1", "secret-pass")
+
+
 async def run(c, tool, **args):
     _, reg = T.toolset(True)
     return await T.execute(c, reg, tool, json.dumps(args))
-
-
-async def test_create_requires_confirmation_and_hides_password(app_env):
-    uid = await _user()
-    tw = DbFake()
-    out, err = await run(ctx(tw, uid), "timeweb_create_database", name="shop-db", db_type="postgres16", preset_id=357, confirmed=False)
-    assert err and tw.created is None
-
-    c = ctx(tw, uid)
-    out, err = await run(c, "timeweb_create_database", name="shop-db", db_type="postgres16", preset_id=357, confirmed=True)
-    assert not err and "777" in out
-    admin = tw.created["admin"]
-    assert tw.created["type"] == "postgres16" and tw.created["instance"]["name"] == "app"
-    assert "CREATE" in admin["privileges"] and admin["password"] not in out
-    rec = await get_record(uid, 777)
-    assert rec and rec.login == admin["login"] and admin["password"] not in rec.password_enc
 
 
 async def test_connect_injects_url_without_leaking_password(app_env):
     uid = await _user()
     tw = DbFake(app_envs={"SECRET_KEY": "visible-value"})
     c = ctx(tw, uid)
-    await run(c, "timeweb_create_database", name="shop-db", db_type="postgres16", preset_id=357, confirmed=True)
-    password = tw.created["admin"]["password"]
+    await _agent_db(uid)
+    password = "secret-pass"
 
     out, err = await run(c, "timeweb_connect_database", app_id="5", database_id=777, url_scheme="postgresql+asyncpg")
     assert not err, out
     envs = tw.patches[0]["envs"]
     assert envs["SECRET_KEY"] == "visible-value"  # остальные переменные сохранены
-    assert envs["DATABASE_URL"] == f"postgresql+asyncpg://{tw.created['admin']['login']}:{password}@5.129.242.60:5432/app"
+    assert envs["DATABASE_URL"] == f"postgresql+asyncpg://u1:{password}@5.129.242.60:5432/app"
     assert password not in out and "DATABASE_URL" in out
     assert tw.deploys == [{"commit_sha": "abc123"}]  # ветка не указана → пересборка последнего коммита
 
@@ -103,7 +94,7 @@ async def test_connect_refuses_when_envs_hidden(app_env):
     uid = await _user()
     tw = DbFake(app_envs={"SECRET_KEY": HIDDEN_ENV})
     c = ctx(tw, uid)
-    await run(c, "timeweb_create_database", name="shop-db", db_type="postgres16", preset_id=357, confirmed=True)
+    await _agent_db(uid)
     out, err = await run(c, "timeweb_connect_database", app_id="5", database_id=777)
     assert err and "скрывает" in out and tw.patches == []
 
@@ -114,11 +105,11 @@ async def test_connect_waits_for_ip_and_unknown_db(app_env, monkeypatch):
     uid = await _user()
     tw = DbFake(db_status="creating", ip=None)
     c = ctx(tw, uid)
-    await run(c, "timeweb_create_database", name="shop-db", db_type="postgres16", preset_id=357, confirmed=True)
+    await _agent_db(uid)
     out, err = await run(c, "timeweb_connect_database", app_id="5", database_id=777)
     assert err and "не готова" in out
     out, err = await run(ctx(tw, uid), "timeweb_connect_database", app_id="5", database_id=12345)
-    assert err and "не через агента" in out
+    assert err and "Настройках" in out
 
 
 async def test_settings_database_endpoints(app_env, monkeypatch):
@@ -131,7 +122,7 @@ async def test_settings_database_endpoints(app_env, monkeypatch):
 
     uid = await _user()
     tw = DbFake()
-    await run(ctx(tw, uid), "timeweb_create_database", name="shop-db", db_type="postgres16", preset_id=357, confirmed=True)
+    await _agent_db(uid)
     async with session_factory()() as db:
         (await db.get(User, uid)).timeweb_token_enc = encrypt("t" * 30)
         other = User(github_id=99, login="other", balance_micro=0, timeweb_token_enc=encrypt("t" * 30))
@@ -143,7 +134,7 @@ async def test_settings_database_endpoints(app_env, monkeypatch):
         dbs = (await c.get("/api/timeweb/databases")).json()["databases"]
         assert dbs[0]["id"] == 777 and dbs[0]["status"] == "started" and "password" not in dbs[0]
         conn = (await c.post("/api/timeweb/databases/777/connection")).json()
-        assert conn["url"].startswith("postgresql://") and conn["password"] == tw.created["admin"]["password"]
+        assert conn["url"].startswith("postgresql://") and conn["password"] == "secret-pass"
         c.cookies.set(SESSION_COOKIE, sign_session(other.id))
         assert (await c.post("/api/timeweb/databases/777/connection")).status_code == 404
 
@@ -260,12 +251,6 @@ class IpFake(DbFake):
         return await super().request(method, path, **kw)
 
 
-async def _agent_db(uid):
-    from app import timeweb_db
-
-    await timeweb_db.save(uid, 777, "shop-db", "postgres16", "app", "u1", "secret-pass")
-
-
 async def test_wait_database_enables_public_network_and_regrants(app_env, monkeypatch):
     monkeypatch.setattr(T, "WAIT_POLL_SECONDS", 0)
     uid = await _user()
@@ -349,3 +334,73 @@ async def test_wait_deploy_hints_at_privileges_bug(app_env, monkeypatch):
     tw.app_logs = logs
     data = json.loads((await run(ctx(tw, 1), "timeweb_wait_deploy", app_id="5", deploy_id="d2"))[0])
     assert "timeweb_fix_database_access" in data["hint"]
+
+
+async def test_user_adds_manually_created_database_in_settings(app_env, monkeypatch):
+    """Человек создал базу в панели и ввёл пароль в Настройках: агент может её подключить, пароль не в чате."""
+    import httpx
+
+    from app.db import session_factory
+    from app.main import create_app
+    from app.models import User
+    from app.security import SESSION_COOKIE, encrypt, sign_session
+
+    uid = await _user()
+    async with session_factory()() as db:
+        (await db.get(User, uid)).timeweb_token_enc = encrypt("t" * 30)
+        await db.commit()
+    tw = DbFake(app_envs={})
+    checked = []
+
+    async def fake_check(host, port, login, password, db_name):
+        checked.append((host, port, login, db_name))
+        return None
+
+    monkeypatch.setattr("app.routers.account.TimewebClient", lambda token: tw)
+    monkeypatch.setattr("app.routers.account._check_postgres", fake_check)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app()), base_url="http://t") as c:
+        c.cookies.set(SESSION_COOKIE, sign_session(uid))
+        avail = (await c.get("/api/timeweb/databases/available")).json()["databases"]
+        assert [(d["id"], d["public_ip"], d["added"]) for d in avail] == [(777, "5.129.242.60", False), (888, None, False)]
+
+        r = (await c.post("/api/timeweb/databases", json={"cluster_id": 777, "password": " pw-from-panel "})).json()
+        # пользователь и имя базы подтянуты из Timeweb, подключение проверено
+        assert r["user"] == "u1" and r["db_name"] == "app" and r["check"] == "ok" and "warning" not in r
+        assert checked == [("5.129.242.60", 5432, "u1", "app")]
+        assert [d["added"] for d in (await c.get("/api/timeweb/databases/available")).json()["databases"]] == [True, False]
+
+        rec = await get_record(uid, 777)
+        assert rec and "pw-from-panel" not in rec.password_enc
+        # повторное добавление обновляет пароль, а не дублирует запись
+        await c.post("/api/timeweb/databases", json={"cluster_id": 777, "password": "new-pw"})
+        assert len((await c.get("/api/timeweb/databases")).json()["databases"]) == 1
+
+    out, err = await run(ctx(tw, uid), "timeweb_list_databases")
+    assert json.loads(out)[0]["password_in_settings"] is True
+    out, err = await run(ctx(tw, uid), "timeweb_connect_database", app_id="5", database_id=777, redeploy=False)
+    assert not err and "new-pw" in tw.patches[-1]["envs"]["DATABASE_URL"] and "new-pw" not in out
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app()), base_url="http://t") as c:
+        c.cookies.set(SESSION_COOKIE, sign_session(uid))
+        assert (await c.delete("/api/timeweb/databases/777")).json()["ok"]
+        assert (await c.delete("/api/timeweb/databases/777")).status_code == 404
+    assert await get_record(uid, 777) is None
+
+
+async def test_adding_database_without_public_ip_warns(app_env, monkeypatch):
+    import httpx
+
+    from app.db import session_factory
+    from app.main import create_app
+    from app.models import User
+    from app.security import SESSION_COOKIE, encrypt, sign_session
+
+    uid = await _user()
+    async with session_factory()() as db:
+        (await db.get(User, uid)).timeweb_token_enc = encrypt("t" * 30)
+        await db.commit()
+    monkeypatch.setattr("app.routers.account.TimewebClient", lambda token: DbFake(ip=None))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app()), base_url="http://t") as c:
+        c.cookies.set(SESSION_COOKIE, sign_session(uid))
+        r = (await c.post("/api/timeweb/databases", json={"cluster_id": 777, "password": "pw"})).json()
+        assert "публичного IP" in r["warning"] and r["check"] is None

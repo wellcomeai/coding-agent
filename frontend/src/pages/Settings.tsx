@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Copy, Database, ExternalLink, Eye, KeyRound, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Database, ExternalLink, Eye, KeyRound, Loader2, Plus, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { useApp } from "../App";
@@ -109,10 +109,105 @@ const DB_STATUS: Record<string, [string, string]> = {
   deleted: ["Удалена", "danger"],
 };
 
+type AvailableDb = { id: number; name: string; type: string; status: string; location: string | null; public_ip: string | null; added: boolean };
+
+function AddDatabase({ onAdded }: { onAdded: () => void }) {
+  const toast = useToast();
+  const [avail, setAvail] = useState<AvailableDb[] | null>(null);
+  const [id, setId] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const load = useCallback(
+    () =>
+      api<{ databases: AvailableDb[] }>("/api/timeweb/databases/available")
+        .then((r) => {
+          setAvail(r.databases);
+          const first = r.databases.find((d) => !d.added);
+          setId((cur) => cur || (first ? String(first.id) : ""));
+        })
+        .catch((e) => {
+          setAvail([]);
+          toast("error", e.message);
+        }),
+    [toast],
+  );
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!id || !password) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await api<any>("/api/timeweb/databases", { method: "POST", json: { cluster_id: Number(id), password } });
+      setPassword("");
+      setResult(
+        r.warning
+          ? { ok: false, text: `База добавлена, но: ${r.warning}` }
+          : { ok: true, text: r.check === "ok" ? "База добавлена, подключение проверено." : "База добавлена." },
+      );
+      onAdded();
+      load();
+    } catch (err: any) {
+      toast("error", err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const options = (avail || []).filter((d) => !d.added);
+  return (
+    <form className="stack" style={{ gap: 10 }} onSubmit={submit}>
+      <div className="muted small">
+        Создайте базу в панели Timeweb:{" "}
+        <a href="https://timeweb.cloud/my/database/create" target="_blank" rel="noreferrer">
+          Базы данных → Создать <ExternalLink size={11} />
+        </a>
+        . Выберите тип (например, PostgreSQL 16), ту же локацию, что у приложения, и обязательно включите «Публичный IP».
+        Когда база запустится, выберите её здесь и введите пароль пользователя — агент подключит её к приложению сам.
+      </div>
+      {avail && options.length === 0 ? (
+        <div className="faint small">В аккаунте Timeweb нет новых баз. Создайте базу в панели и нажмите «Обновить».</div>
+      ) : (
+        <div className="row wrap" style={{ gap: 8 }}>
+          <select className="input" style={{ flex: "1 1 220px", width: "auto" }} value={id} onChange={(e) => setId(e.target.value)} disabled={!avail}>
+            {options.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name} · {d.type} · {d.public_ip ? d.public_ip : "без публичного IP"}
+              </option>
+            ))}
+          </select>
+          <input
+            className="input"
+            style={{ flex: "1 1 180px", width: "auto" }}
+            type="password"
+            autoComplete="new-password"
+            placeholder="Пароль пользователя базы"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <button className="btn primary sm" disabled={busy || !id || !password}>
+            {busy ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} Добавить
+          </button>
+        </div>
+      )}
+      {result && (
+        <div className={"small " + (result.ok ? "" : "codebox error")} style={result.ok ? { color: "var(--success)" } : undefined}>
+          {result.text}
+        </div>
+      )}
+    </form>
+  );
+}
+
 function Databases() {
   const toast = useToast();
   const [items, setItems] = useState<DbItem[] | null>(null);
   const [shown, setShown] = useState<Record<number, any>>({});
+  const [addKey, setAddKey] = useState(0);
   const load = useCallback(() => api<{ databases: DbItem[] }>("/api/timeweb/databases").then((r) => setItems(r.databases)), []);
   useEffect(() => {
     load().catch(() => setItems([]));
@@ -139,8 +234,17 @@ function Databases() {
       toast("error", e.message);
     }
   }
+  async function forget(id: number, name: string) {
+    if (!confirm(`Убрать «${name}» из сервиса? Сама база в Timeweb не удалится, сервис просто забудет пароль.`)) return;
+    try {
+      await api(`/api/timeweb/databases/${id}`, { method: "DELETE" });
+      load();
+      setAddKey((k) => k + 1);
+    } catch (e: any) {
+      toast("error", e.message);
+    }
+  }
 
-  if (!items || items.length === 0) return null;
   return (
     <div className="card">
       <div className="card-head">
@@ -150,15 +254,21 @@ function Databases() {
           </span>
           <div>
             <h3>Базы данных</h3>
-            <p className="muted small">Созданы агентом в вашем аккаунте Timeweb. Пароли знает только сервис.</p>
+            <p className="muted small">Базы, которые агент может подключать к приложениям. Пароли хранятся зашифрованными и не попадают в чат.</p>
           </div>
         </div>
-        <button className="btn ghost sm" onClick={() => load()}>
+        <button
+          className="btn ghost sm"
+          onClick={() => {
+            load();
+            setAddKey((k) => k + 1);
+          }}
+        >
           <RefreshCw size={13} /> Обновить
         </button>
       </div>
       <div className="card-pad stack" style={{ gap: 12 }}>
-        {items.map((d) => {
+        {(items || []).map((d) => {
           const [label, cls] = DB_STATUS[d.status || ""] || [d.status || "—", ""];
           const c = shown[d.id];
           return (
@@ -167,7 +277,7 @@ function Databases() {
                 <b>{d.name}</b>
                 <span className="muted small mono">
                   {d.type} · {d.db_name}
-                  {d.host ? ` · ${d.host}:${d.port}` : ""}
+                  {d.host ? ` · ${d.host}:${d.port}` : " · без публичного IP"}
                 </span>
                 <span className={"badge " + cls}>{label}</span>
                 <div className="spacer" />
@@ -176,6 +286,9 @@ function Databases() {
                 </button>
                 <button className="btn ghost sm" onClick={() => reveal(d.id)} disabled={d.status !== "started"}>
                   <Eye size={13} /> {c ? "Скрыть" : "Параметры"}
+                </button>
+                <button className="btn ghost sm" onClick={() => forget(d.id, d.name)} title="Убрать из сервиса">
+                  <Trash2 size={13} />
                 </button>
               </div>
               {c && (
@@ -186,6 +299,7 @@ function Databases() {
             </div>
           );
         })}
+        <AddDatabase key={addKey} onAdded={load} />
       </div>
     </div>
   );

@@ -36,7 +36,9 @@ The user connected their Timeweb Cloud account. You can deploy the repository as
   as the key the user provided: never ask for it in chat, never print, echo or write it to files, and do not
   `export` it yourself (it is already set). Use it only through the variable.
 - If the repository has its own deploy instructions or script (DEPLOY.md, AGENTS.md, a deploy skill), follow them
-  instead of the `timeweb_*` tools, running the script with `$TIMEWEB_TOKEN`. Paid steps still need the user's
+  instead of the `timeweb_*` tools, running the script with `$TIMEWEB_TOKEN` — except creating databases (see
+  Databases below: the user creates them, then pass the added database to the script, e.g. its DATABASE_URL
+  option, or connect it with `timeweb_connect_database`). Paid steps still need the user's
   explicit confirmation in chat first.
 - Files the deploy script keeps in your home directory (e.g. `~/.opensaas-timeweb` with DB and admin passwords) are
   saved between sessions, so later commands like `set-env` or `test-email` keep working in a new session.
@@ -44,14 +46,19 @@ The user connected their Timeweb Cloud account. You can deploy the repository as
   then check `timeweb_deploy_logs` / `timeweb_app_logs` and fix build errors yourself.
 
 ### Databases
-- If the app needs a database, create a managed one with `timeweb_create_database` (PAID — show tariff and price
-  from `timeweb_db_options`, same location as the app, plus the separately billed public IP that the app needs
-  to reach the database, and get explicit confirmation). Never suggest SQLite or a DB
-  inside the app container for production, and do not ask the user to create the DB manually.
-- Wait until the database is ready with `timeweb_wait_database` (it can take several minutes; one call waits on the
-  server, enables the public IP and re-grants user privileges — never poll with `bash sleep`). An app must always
-  get a database with a public IP: if a database is running without one, or the app fails with "CONNECT privilege"
-  / "permission denied for database", call `timeweb_fix_database_access`.
+- Never create databases yourself (there is no tool for it, and do not create one with scripts or the API either —
+  this overrides repository deploy instructions). The user creates the database in the Timeweb panel: it is simple
+  and the panel reliably gives it a public IP.
+- If the app needs a database and `timeweb_list_databases` shows none with `password_in_settings: true`, stop and ask
+  the user, in simple steps:
+  1. Timeweb panel → Базы данных → Создать (https://timeweb.cloud/my/database/create): pick the DB type the app
+     needs (e.g. PostgreSQL 16), the same location as the app, a tariff, and turn on «Публичный IP»;
+  2. when it is running, open Настройки → Базы данных in this service, pick the database and enter its password.
+  Never ask for the password in chat; if the user posts it anyway, do not repeat it and ask them to add it in
+  Settings. Never suggest SQLite or a DB inside the app container for production.
+- When the database is added, run `timeweb_wait_database` (checks it is running, has a public IP and re-grants user
+  privileges — never poll with `bash sleep`). If the app fails with "CONNECT privilege" / "permission denied for
+  database", call `timeweb_fix_database_access`.
 - Connect it: for a new app pass `database_id` to `timeweb_create_app`; for an existing app use
   `timeweb_connect_database`. Pick `mode`/`url_scheme` to match the code (e.g. SQLAlchemy async → postgresql+asyncpg).
 - You never see DB passwords; the server injects them. Do not print or commit connection strings.
