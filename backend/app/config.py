@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     robokassa_receipt: bool = False
     robokassa_receipt_sno: str = "usn_income"
     robokassa_receipt_tax: str = "none"
-    topup_min_rub: int = 100
+    topup_min_rub: int = 10
     topup_max_rub: int = 100_000
     topup_packages: str = "300,1000,3000,10000"
 

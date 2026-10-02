@@ -44,7 +44,7 @@ async def test_topup_flow(app_env, robokassa_env):
     transport = httpx.ASGITransport(app=create_app())
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
         c.cookies.set(SESSION_COOKIE, sign_session(u.id))
-        assert (await c.post("/api/billing/topup", json={"amount_rub": 5})).status_code == 400
+        assert (await c.post("/api/billing/topup", json={"amount_rub": 5})).status_code == 400  # меньше минимума (10 ₽)
         r = await c.post("/api/billing/topup", json={"amount_rub": 500})
         assert r.status_code == 200, r.text
         inv = r.json()["payment_id"]
