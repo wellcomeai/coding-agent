@@ -11,7 +11,7 @@ from .agent.runner import runner
 from .billing import price_book
 from .config import get_settings
 from .db import create_all, init_engine
-from .routers import account, auth, repos, sessions, setup
+from .routers import account, auth, payments, repos, sessions, setup
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("app")
@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     s = get_settings()
     app = FastAPI(title=s.app_name, lifespan=lifespan)
-    for r in (auth.router, repos.router, sessions.router, account.router, setup.router):
+    for r in (auth.router, repos.router, sessions.router, account.router, setup.router, payments.router):
         app.include_router(r)
 
     @app.get("/api/health")

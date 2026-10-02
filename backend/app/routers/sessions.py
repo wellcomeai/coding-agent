@@ -1,5 +1,6 @@
 import asyncio
 import json
+import shlex
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -15,6 +16,7 @@ from ..db import get_db, session_factory
 from ..deps import current_user, user_github_token
 from ..events import bus
 from ..models import AgentSession, SessionEvent, User
+from ..sandbox import get_provider
 from ..security import SESSION_COOKIE, read_session
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -187,3 +189,30 @@ async def events(session_id: str, request: Request, after: int = 0):
     return StreamingResponse(
         stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     )
+
+
+@router.get("/{session_id}/changes")
+async def changes(session_id: str, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
+    """Изменения рабочей ветки относительно базовой (включая незакоммиченные), по файлам."""
+    sess = await _get_owned(db, session_id, user)
+    sb = await get_provider().get(sess.sandbox_id) if sess.sandbox_id else None
+    if not sb:
+        return {"available": False, "files": []}
+    base = shlex.quote(f"origin/{sess.base_branch}")
+    numstat = await sb.exec(f"git add -A -N . && git diff --numstat {base}", timeout=60)
+    patch = await sb.exec(f"git diff --no-color {base} | head -c 400000", timeout=60)
+    if numstat.exit_code != 0:
+        return {"available": False, "files": []}
+    stats = {}
+    for line in numstat.output.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3:
+            add, rem, path = parts
+            stats[path] = (int(add) if add.isdigit() else 0, int(rem) if rem.isdigit() else 0)
+    files = []
+    for chunk in ("\n" + patch.output).split("\ndiff --git ")[1:]:
+        header = chunk.split("\n", 1)[0]
+        path = header.split(" b/", 1)[-1] if " b/" in header else header
+        add, rem = stats.get(path, (0, 0))
+        files.append({"path": path, "additions": add, "deletions": rem, "patch": "diff --git " + chunk})
+    return {"available": True, "files": files}

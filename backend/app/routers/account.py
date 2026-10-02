@@ -45,9 +45,14 @@ async def billing_info(user: User = Depends(current_user), db: AsyncSession = De
             select(LedgerEntry).where(LedgerEntry.user_id == user.id).order_by(LedgerEntry.id.desc()).limit(200)
         )
     ).scalars().all()
+    s = get_settings()
     return {
         "balance_rub": billing.micro_to_rub(await billing.get_balance(db, user.id)),
-        "prices": billing.price_book.public_prices(get_settings().models),
+        "prices": billing.price_book.public_prices(s.models),
+        "payments_enabled": s.robokassa_enabled,
+        "packages": s.packages,
+        "topup_min_rub": s.topup_min_rub,
+        "topup_max_rub": s.topup_max_rub,
         "ledger": [
             {
                 "id": r.id,

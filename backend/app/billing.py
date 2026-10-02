@@ -90,10 +90,10 @@ class PriceBook:
         cached_tokens = min(cached_tokens, prompt_tokens)
         cache_price = p.cache_read if p.cache_read is not None else p.input
         rub = (prompt_tokens - cached_tokens) * p.input + cached_tokens * cache_price + completion_tokens * p.output
-        return max(1, rub_to_micro(rub * get_settings().price_markup)) if (prompt_tokens or completion_tokens) else 0
+        return max(1, rub_to_micro(rub * get_settings().markup)) if (prompt_tokens or completion_tokens) else 0
 
     def public_prices(self, models: list[str]) -> list[dict]:
-        markup = get_settings().price_markup
+        markup = get_settings().markup
         out = []
         for m in models:
             p = self.get(m)
@@ -102,6 +102,8 @@ class PriceBook:
                     "model": m,
                     "input_per_m_rub": round(p.input * 1e6 * markup, 2),
                     "output_per_m_rub": round(p.output * 1e6 * markup, 2),
+                    # Ориентир: типичная задача ≈ 400 тыс. входных (из них ~70% из кэша) и 15 тыс. выходных токенов
+                    "typical_task_rub": round(self.cost_micro(m, 400_000, 15_000, 280_000) / MICRO, 2),
                 }
             )
         return out

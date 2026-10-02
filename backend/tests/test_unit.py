@@ -22,7 +22,7 @@ def test_price_lookup_and_cost():
     assert pb.get("claude-sonnet-5").input == 0.0004
     assert pb.get("anthropic/claude-sonnet-5").output == 0.002
     cost = pb.cost_micro("anthropic/claude-sonnet-5", 1000, 100, cached_tokens=500)
-    markup = billing.get_settings().price_markup
+    markup = billing.get_settings().markup
     expected = (500 * 0.0004 + 500 * 0.00004 + 100 * 0.002) * markup
     assert cost == billing.rub_to_micro(expected)
     assert pb.cost_micro("x", 0, 0) == 0

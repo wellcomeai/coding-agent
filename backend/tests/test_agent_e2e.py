@@ -81,6 +81,10 @@ async def test_full_agent_turn(app_env, monkeypatch):
         assert detail["status"] == "idle"
         assert detail["cost_rub"] > 0
 
+        ch = (await client.get(f"/api/sessions/{sid}/changes")).json()
+        assert ch["available"] and [f["path"] for f in ch["files"]] == ["hello.py"]
+        assert ch["files"][0]["additions"] == 1 and "+print('hello')" in ch["files"][0]["patch"]
+
     # в «GitHub» появилась рабочая ветка с файлом
     branch = f"agent/{sid[:8]}"
     out = subprocess.run(["git", "--git-dir", str(app_env["bare"]), "show", f"{branch}:hello.py"],

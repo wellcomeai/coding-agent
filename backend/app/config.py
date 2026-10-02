@@ -49,13 +49,34 @@ class Settings(BaseSettings):
     # Наш токен Timeweb Cloud: используется для загрузки прайса моделей Cloud AI
     timeweb_api_token: str = ""
     timeweb_api_url: str = "https://api.timeweb.cloud"
-    # Наценка на себестоимость токенов (1.0 = без наценки)
-    price_markup: float = 1.5
+    # Наценка на себестоимость токенов. Если 0 — считается автоматически:
+    #   (1 + target_margin) * (1 + infra_overhead) / (1 - payment_fee - tax_rate)
+    price_markup: float = 0.0
+    target_margin: float = 0.25  # чистая прибыль сверх всех расходов
+    payment_fee: float = 0.05  # комиссия платёжной системы (Робокасса)
+    tax_rate: float = 0.06  # налог с выручки (УСН 6%)
+    infra_overhead: float = 0.05  # серверы песочниц и прочая инфраструктура
     # Цена по умолчанию (руб. за 1M токенов), если модели нет в прайсе Timeweb
     default_price_in_per_m: float = 500.0
     default_price_out_per_m: float = 2500.0
     # Стартовый бонус новым пользователям, руб.
     signup_bonus_rub: float = 0.0
+
+    # --- Робокасса ---
+    robokassa_login: str = ""
+    robokassa_password1: str = ""
+    robokassa_password2: str = ""
+    robokassa_hash: str = "md5"  # md5 | sha256 | sha512 (как в настройках магазина)
+    robokassa_test: bool = False
+    robokassa_test_password1: str = ""
+    robokassa_test_password2: str = ""
+    # Передавать чек для фискализации (54-ФЗ), если магазин подключён к облачной кассе
+    robokassa_receipt: bool = False
+    robokassa_receipt_sno: str = "usn_income"
+    robokassa_receipt_tax: str = "none"
+    topup_min_rub: int = 100
+    topup_max_rub: int = 100_000
+    topup_packages: str = "300,1000,3000,10000"
 
     # --- Песочницы ---
     sandbox_provider: str = "docker"  # docker | local (local — только для разработки!)
@@ -72,6 +93,20 @@ class Settings(BaseSettings):
     @property
     def github_configured(self) -> bool:
         return bool(self.github_app_id and self.github_client_id and self.github_client_secret and self.github_private_key_pem())
+
+    @property
+    def markup(self) -> float:
+        if self.price_markup > 0:
+            return self.price_markup
+        return (1 + self.target_margin) * (1 + self.infra_overhead) / (1 - self.payment_fee - self.tax_rate)
+
+    @property
+    def robokassa_enabled(self) -> bool:
+        return bool(self.robokassa_login and self.robokassa_password1 and self.robokassa_password2)
+
+    @property
+    def packages(self) -> list[int]:
+        return [int(x) for x in self.topup_packages.split(",") if x.strip()]
 
     @property
     def admin_logins(self) -> set[str]:

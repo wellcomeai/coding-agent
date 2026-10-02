@@ -83,3 +83,19 @@ class AppConfig(Base):
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value_enc: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class Payment(Base):
+    """Пополнение баланса через платёжную систему. id используется как InvId Робокассы."""
+
+    __tablename__ = "payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    amount_kop: Mapped[int] = mapped_column(BigInteger)  # сумма в копейках
+    provider: Mapped[str] = mapped_column(String(20), default="robokassa")
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | paid
+    is_test: Mapped[bool] = mapped_column(default=False)
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
