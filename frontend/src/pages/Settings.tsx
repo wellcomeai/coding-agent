@@ -1,8 +1,94 @@
-import { CheckCircle2, ExternalLink, KeyRound, Loader2, ShieldCheck } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { AlertTriangle, CheckCircle2, ExternalLink, KeyRound, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { useApp } from "../App";
 import { GitHubMark, TimewebMark, useToast } from "../components/ui";
+
+type TwStatus = {
+  connected: boolean;
+  valid?: boolean;
+  error?: string;
+  account?: string;
+  providers?: { login: string; type: string; repos_count: number | null; error?: string }[];
+  providers_error?: string;
+};
+
+function TimewebStatus({ refreshKey }: { refreshKey: number }) {
+  const [st, setSt] = useState<TwStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setSt(await api<TwStatus>("/api/settings/timeweb/status"));
+    } catch (e: any) {
+      setSt({ connected: true, valid: false, error: e.message });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load, refreshKey]);
+
+  if (!st) return <div className="skeleton" style={{ height: 64 }} />;
+  if (!st.connected) return null;
+  if (!st.valid)
+    return (
+      <div className="callout danger">
+        <AlertTriangle size={16} />
+        <div>{st.error}</div>
+      </div>
+    );
+  const gh = (st.providers || []).filter((p) => p.type === "github" || !p.type);
+  return (
+    <div className="tw-status">
+      <div className="row">
+        <CheckCircle2 size={15} style={{ color: "var(--success)" }} />
+        <span>
+          Токен действителен · аккаунт Timeweb <b>{st.account}</b>
+        </span>
+        <div className="spacer" />
+        <button className="btn ghost sm" onClick={load} disabled={loading} title="Проверить ещё раз">
+          <RefreshCw size={13} className={loading ? "spin" : ""} /> Проверить
+        </button>
+      </div>
+      {st.providers_error ? (
+        <div className="callout danger">
+          <AlertTriangle size={16} />
+          <div>{st.providers_error}</div>
+        </div>
+      ) : gh.length === 0 ? (
+        <div className="callout">
+          <AlertTriangle size={16} style={{ color: "var(--warning)" }} />
+          <div>
+            В Timeweb не подключён GitHub — агент не сможет деплоить. Подключите его один раз:{" "}
+            <a href="https://timeweb.cloud/my/apps/create" target="_blank" rel="noreferrer">
+              Apps → Создать → «Добавить аккаунт»
+            </a>
+            , затем нажмите «Проверить».
+          </div>
+        </div>
+      ) : (
+        gh.map((p) => (
+          <div key={p.login} className="row">
+            {p.error ? (
+              <AlertTriangle size={15} style={{ color: "var(--danger)" }} />
+            ) : (
+              <CheckCircle2 size={15} style={{ color: "var(--success)" }} />
+            )}
+            <span>
+              GitHub в Timeweb: <b>{p.login}</b>
+              <span className="muted">
+                {" "}
+                · {p.error ? p.error : `${p.repos_count ?? 0} репозиториев доступно для деплоя`}
+              </span>
+            </span>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
 
 export default function Settings() {
   const { me, refreshMe } = useApp();
@@ -10,6 +96,7 @@ export default function Settings() {
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(!me.has_timeweb);
+  const [statusKey, setStatusKey] = useState(0);
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -19,6 +106,7 @@ export default function Settings() {
       toast("success", `Timeweb Cloud подключён (аккаунт ${r.login})`);
       setToken("");
       setEditing(false);
+      setStatusKey((k) => k + 1);
       refreshMe();
     } catch (err: any) {
       toast("error", err.message);
@@ -100,6 +188,8 @@ export default function Settings() {
                 </form>
               </>
             ) : (
+              <>
+              <TimewebStatus refreshKey={statusKey} />
               <div className="row wrap">
                 <span className="muted" style={{ flex: 1 }}>
                   Агент может создавать приложения, запускать деплой и читать логи. Платные действия — только с вашего
@@ -112,6 +202,7 @@ export default function Settings() {
                   Отключить
                 </button>
               </div>
+              </>
             )}
             <div className="row faint small">
               <ShieldCheck size={14} /> Токен хранится в зашифрованном виде и никогда не передаётся языковой модели.

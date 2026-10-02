@@ -28,7 +28,7 @@ TIMEWEB_ENABLED = """
 The user connected their Timeweb Cloud account. You can deploy the repository as a Timeweb Cloud App
 (backend or frontend) with the `timeweb_*` tools.
 - Timeweb builds the app from a GitHub branch; the user's GitHub must be connected in the Timeweb panel
-  (https://timeweb.cloud/my/apps/create). If `timeweb_find_repository` finds nothing, ask the user to connect GitHub there.
+  (https://timeweb.cloud/my/apps/create). If `timeweb_find_repository` reports a problem, relay its explanation to the user verbatim (it says exactly what is missing). Never claim GitHub is not connected without calling it.
 - Deploy only code that is pushed. Use `timeweb_deploy_options` to pick a preset (tariff), framework and commands.
 - Creating an app costs the user money: ALWAYS show the chosen preset with its price and get explicit confirmation
   from the user in chat before calling `timeweb_create_app` (pass confirmed=true only after the user agreed).

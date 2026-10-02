@@ -1236,3 +1236,14 @@ a.step:hover {
     margin-left: 0;
   }
 }
+
+.tw-status {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 13.5px;
+}

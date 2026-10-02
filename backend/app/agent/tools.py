@@ -237,15 +237,25 @@ async def t_timeweb_list_apps(ctx: ToolContext) -> str:
 
 
 async def t_timeweb_find_repository(ctx: ToolContext) -> str:
-    found = await _tw(ctx).find_repository(ctx.repo)
-    if not found:
-        return (
-            f"Репозиторий {ctx.repo} не найден среди подключённых к Timeweb GitHub-аккаунтов. "
-            "Пользователю нужно подключить GitHub в панели Timeweb: https://timeweb.cloud/my/apps/create "
-            "(и выдать доступ к этому репозиторию)."
-        )
-    provider_id, repo = found
-    return json.dumps({"provider_id": provider_id, "repository_id": repo["id"], "full_name": repo["full_name"]})
+    try:
+        lookup = await _tw(ctx).diagnose_repository(ctx.repo)
+    except TimewebError as e:
+        raise ToolError(
+            f"Timeweb API вернул ошибку: {e}. Если это 401/403 — токен недействителен или у него нет прав на Apps; "
+            "пользователю нужно создать новый токен и сохранить его в Настройках."
+        ) from e
+    if not lookup.match:
+        return lookup.summary()
+    provider_id, repo = lookup.match
+    return json.dumps(
+        {
+            "connected": True,
+            "provider_id": provider_id,
+            "repository_id": repo.get("id"),
+            "full_name": repo.get("full_name") or ctx.repo,
+        },
+        ensure_ascii=False,
+    )
 
 
 async def t_timeweb_deploy_options(ctx: ToolContext, app_type: str = "backend") -> str:

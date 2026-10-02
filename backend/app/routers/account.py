@@ -8,7 +8,7 @@ from ..config import get_settings
 from ..db import get_db
 from ..deps import admin_user, current_user
 from ..models import LedgerEntry, User
-from ..security import encrypt
+from ..security import decrypt, encrypt
 from ..timeweb import TimewebClient, TimewebError
 
 router = APIRouter(prefix="/api", tags=["account"])
@@ -28,6 +28,31 @@ async def set_timeweb_token(body: TimewebToken, user: User = Depends(current_use
     user.timeweb_token_enc = encrypt(token)
     await db.commit()
     return {"ok": True, "login": status.get("login")}
+
+
+@router.get("/settings/timeweb/status")
+async def timeweb_status(user: User = Depends(current_user)):
+    """Проверка интеграции: токен действителен и какие GitHub-аккаунты подключены в Timeweb."""
+    token = decrypt(user.timeweb_token_enc)
+    if not token:
+        return {"connected": False}
+    client = TimewebClient(token)
+    try:
+        account = await client.account_status()
+    except TimewebError as e:
+        return {"connected": True, "valid": False, "error": f"Токен не принят Timeweb ({e.status}). Создайте новый токен."}
+    out: dict = {"connected": True, "valid": True, "account": account.get("login"), "providers": []}
+    try:
+        for p in await client.list_providers():
+            item = {"login": p.get("login"), "type": str(p.get("provider_type") or "").lower(), "repos_count": None}
+            try:
+                item["repos_count"] = len(await client.list_provider_repos(p["provider_id"]))
+            except TimewebError as e:
+                item["error"] = str(e)
+            out["providers"].append(item)
+    except TimewebError as e:
+        out["providers_error"] = f"Не удалось получить подключённые аккаунты GitHub: {e}"
+    return out
 
 
 @router.delete("/settings/timeweb")
