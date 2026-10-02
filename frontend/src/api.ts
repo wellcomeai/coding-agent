@@ -16,6 +16,7 @@ export type Repo = {
   private: boolean;
   default_branch: string;
   installation_id: number;
+  pushed_at?: string;
 };
 
 export type SessionInfo = {
@@ -35,8 +36,25 @@ export type SessionInfo = {
 
 export type AgentEvent = { type: string; data: any; seq: number | null; ts?: string };
 
+export type Price = { model: string; input_per_m_rub: number; output_per_m_rub: number; typical_task_rub: number };
+
+export type BillingInfo = {
+  balance_rub: number;
+  prices: Price[];
+  payments_enabled: boolean;
+  packages: number[];
+  topup_min_rub: number;
+  topup_max_rub: number;
+  ledger: { id: number; amount_rub: number; kind: string; session_id: string | null; meta: any; created_at: string }[];
+};
+
+export type FileChange = { path: string; additions: number; deletions: number; patch: string };
+
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
     super(message);
   }
 }
@@ -50,7 +68,7 @@ export async function api<T = any>(path: string, init: RequestInit & { json?: un
     body: json !== undefined ? JSON.stringify(json) : rest.body,
   });
   if (!res.ok) {
-    let msg = res.statusText;
+    let msg = res.statusText || "Ошибка запроса";
     try {
       const body = await res.json();
       msg = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body);
@@ -61,6 +79,3 @@ export async function api<T = any>(path: string, init: RequestInit & { json?: un
   }
   return res.json();
 }
-
-export const rub = (v: number) =>
-  v.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " ₽";

@@ -102,8 +102,8 @@ class PriceBook:
                     "model": m,
                     "input_per_m_rub": round(p.input * 1e6 * markup, 2),
                     "output_per_m_rub": round(p.output * 1e6 * markup, 2),
-                    # Ориентир: типичная задача ≈ 400 тыс. входных (из них ~70% из кэша) и 15 тыс. выходных токенов
-                    "typical_task_rub": round(self.cost_micro(m, 400_000, 15_000, 280_000) / MICRO, 2),
+                    # Ориентир: типичная задача ≈ 250 тыс. входных (из них ~70% из кэша) и 10 тыс. выходных токенов
+                    "typical_task_rub": round(self.cost_micro(m, 250_000, 10_000, 175_000) / MICRO, 2),
                 }
             )
         return out
