@@ -40,6 +40,15 @@ services:
     command: ["true"]
     restart: "no"
 
+  # Синхронизирует скрипт автообновления на хосте с версией из репозитория
+  host-sync:
+    image: alpine:3.20
+    command: ["sh", "-c", "cp /src/update.sh /host-bin/coding-agent-update && chmod 755 /host-bin/coding-agent-update"]
+    volumes:
+      - ./deploy:/src:ro
+      - /usr/local/bin:/host-bin
+    restart: "no"
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
