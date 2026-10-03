@@ -20,7 +20,7 @@ from . import persist
 from . import tools as T
 from .llm import get_llm
 from .narrator import Narrator
-from .prompts import build_system_prompt
+from .prompts import NEW_BRANCH_NOTE, build_system_prompt
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +29,14 @@ HISTORY_CHAR_BUDGET = 350_000
 # сжатие правит очередное старое сообщение и сбрасывает кэш промпта почти на каждом вызове модели.
 COMPACT_TARGET = 0.6
 KEEP_RECENT = 8
+# Ссылка в песочнице на коммит, с которого начата работа: от неё считаются «Изменения», когда агент
+# работает прямо в выбранной ветке (origin/<ветка> после пуша уже содержит его коммиты)
+START_REF = "refs/agent/start"
+
+
+def autosave_branch(session_id: str) -> str:
+    """Ветка для автосохранения незакоммиченной работы, когда агент работает прямо в выбранной ветке."""
+    return f"agent/autosave-{session_id[:8]}"
 
 
 def compact_history(history: list[dict], budget: int = HISTORY_CHAR_BUDGET) -> list[dict]:
@@ -136,8 +144,19 @@ class AgentRunner:
             f"git config user.email {q(f'{user.github_id}+{user.login}@users.noreply.github.com')} && "
             f"if git rev-parse -q --verify origin/{q(sess.work_branch)} >/dev/null; then "
             f"git checkout -q -B {q(sess.work_branch)} origin/{q(sess.work_branch)}; "
-            f"else git checkout -q -B {q(sess.work_branch)} origin/{q(sess.base_branch)}; fi"
+            f"else git checkout -q -B {q(sess.work_branch)} origin/{q(sess.base_branch)}; fi && "
+            f"git update-ref {START_REF} HEAD"
         )
+        if sess.work_branch == sess.base_branch:
+            # Вернуть незакоммиченную работу, сохранённую при остановке песочницы, и убрать временную ветку
+            backup = q(autosave_branch(sess.id))
+            cmd += (
+                f" && if git rev-parse -q --verify origin/{backup} >/dev/null; then "
+                f"if git merge -q --squash origin/{backup} >/dev/null 2>&1; then git reset -q; "
+                f"git {auth} push -q origin --delete {backup} || true; "
+                # При конфликте временная ветка остаётся на GitHub, чтобы работу можно было забрать вручную
+                f"else git reset -q --hard; fi; fi"
+            )
         res = await sb.exec(cmd, timeout=900, workdir=parent)
         if res.exit_code != 0:
             raise RuntimeError("Не удалось клонировать репозиторий:\n" + T.scrub(res.output, [token])[-2000:])
@@ -180,6 +199,18 @@ class AgentRunner:
                     await db.commit()
                 await bus.publish(session_id, "pr", {"url": url})
 
+            async def on_branch(name: str) -> None:
+                async with session_factory()() as db:
+                    await db.execute(
+                        update(AgentSession).where(AgentSession.id == session_id).values(work_branch=name, pr_url=None)
+                    )
+                    await db.commit()
+                await bus.publish(session_id, "branch", {"work_branch": name})
+
+            new_branch_required = sess.work_branch == sess.base_branch and any(
+                m.get("role") == "user" and m.get("content") == NEW_BRANCH_NOTE for m in history
+            )
+
             ctx = T.ToolContext(
                 sandbox=sandbox,
                 repo=sess.repo_full_name,
@@ -190,13 +221,16 @@ class AgentRunner:
                 user_id=user.id,
                 pr_url=sess.pr_url,
                 on_pr=on_pr,
+                on_branch=on_branch,
+                new_branch_required=new_branch_required,
                 secrets=[tw_token] if tw_token else [],
                 # Ключ из Настроек доступен скриптам проекта (например, deploy_timeweb.py) как $TIMEWEB_TOKEN
                 bash_env={"TIMEWEB_TOKEN": tw_token} if tw_token else {},
             )
             specs, registry = T.toolset(with_timeweb=bool(tw_token))
             system = build_system_prompt(
-                sess.repo_full_name, sandbox.repo_dir, sess.base_branch, sess.work_branch, bool(tw_token)
+                sess.repo_full_name, sandbox.repo_dir, sess.base_branch, sess.work_branch, bool(tw_token),
+                new_branch_required,
             )
             await billing.price_book.refresh()
             llm = get_llm()
@@ -342,7 +376,8 @@ class AgentRunner:
     # ---------------- обслуживание ----------------
 
     async def release_sandbox(self, sess: AgentSession, autosave: bool = True) -> None:
-        """Удалить песочницу; незакоммиченные изменения сохраняются WIP-коммитом в рабочую ветку."""
+        """Удалить песочницу; незакоммиченные изменения сохраняются WIP-коммитом в рабочую ветку
+        (или во временную ветку, если агент работает прямо в выбранной — чтобы не пушить WIP в неё)."""
         if not sess.sandbox_id:
             return
         provider = get_provider()
@@ -355,9 +390,13 @@ class AgentRunner:
                     res = await sb.exec("git status --porcelain", timeout=60)
                     if res.exit_code == 0 and res.output.strip():
                         token = await github_app.installation_token(sess.installation_id, sess.repo_full_name)
+                        target = sess.work_branch
+                        force = ""
+                        if sess.work_branch == sess.base_branch:
+                            target, force = autosave_branch(sess.id), "-f "
                         await sb.exec(
                             "git add -A && git commit -q -m 'WIP: автосохранение Coding Agent' && "
-                            f"git {T.git_auth_args(token)} push -q origin HEAD:refs/heads/{shlex.quote(sess.work_branch)}",
+                            f"git {T.git_auth_args(token)} push -q {force}origin HEAD:refs/heads/{shlex.quote(target)}",
                             timeout=300,
                         )
                 except Exception as e:  # noqa: BLE001

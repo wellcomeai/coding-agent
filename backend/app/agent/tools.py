@@ -36,6 +36,10 @@ class ToolContext:
     user_id: int = 0
     pr_url: str | None = None
     on_pr: Callable[[str], Awaitable[None]] | None = None
+    # Вызывается, когда агент переключился на новую ветку (create_branch), чтобы сохранить её в сессии
+    on_branch: Callable[[str], Awaitable[None]] | None = None
+    # Пользователь включил «Новая ветка»: пушить в базовую ветку нельзя, пока агент не создаст свою
+    new_branch_required: bool = False
     # Токены, которые нужно вырезать из любого вывода
     secrets: list[str] = field(default_factory=list)
     # Переменные окружения для команд агента в bash (например, TIMEWEB_TOKEN из Настроек).
@@ -162,7 +166,15 @@ async def t_grep(ctx: ToolContext, pattern: str, path: str = ".", glob: str | No
 # ---------------- git / GitHub ----------------
 
 
+PUSH_REJECTED_HINTS = ("[rejected]", "fetch first", "non-fast-forward")
+
+
 async def t_git_commit_and_push(ctx: ToolContext, message: str) -> str:
+    if ctx.new_branch_required and ctx.work_branch == ctx.base_branch:
+        raise ToolError(
+            f"Пользователь просил работать в отдельной ветке, а не в {ctx.base_branch}. "
+            "Сначала создайте ветку инструментом create_branch, затем повторите git_commit_and_push."
+        )
     code, status = await run(ctx, "git add -A && git status --porcelain", 120)
     if code:
         raise ToolError(status)
@@ -171,9 +183,29 @@ async def t_git_commit_and_push(ctx: ToolContext, message: str) -> str:
         if code:
             raise ToolError(f"git commit завершился с ошибкой:\n{out}")
     token = await ctx.gh_token()
-    code, out = await run(ctx, f"git {git_auth_args(token)} push -u origin HEAD:refs/heads/{ctx.work_branch} 2>&1", 300)
+    auth = git_auth_args(token)
+    branch = shlex.quote(ctx.work_branch)
+    push = f"git {auth} push -u origin HEAD:refs/heads/{branch} 2>&1"
+    code, out = await run(ctx, push, 300)
+    if code and any(h in out for h in PUSH_REJECTED_HINTS):
+        # Пока агент работал, в ветку запушили другие коммиты: встраиваем свои поверх них
+        code, out = await run(ctx, f"git {auth} fetch -q origin {branch} 2>&1 && git rebase -q FETCH_HEAD 2>&1", 300)
+        if code:
+            await run(ctx, "git rebase --abort", 60)
+            raise ToolError(
+                f"В ветке {ctx.work_branch} на GitHub появились новые коммиты, и rebase на них дал конфликт:\n{out}\n"
+                "Ваши коммиты сохранены локально. Создайте отдельную ветку инструментом create_branch и запушьте "
+                "их туда, либо сообщите пользователю о конфликте."
+            )
+        code, out = await run(ctx, push, 300)
     if code:
-        raise ToolError(f"git push завершился с ошибкой:\n{out}")
+        hint = ""
+        if "protected branch" in out or "GH006" in out or "GH013" in out:
+            hint = (
+                f"\nВетка {ctx.work_branch} защищена на GitHub. Предложите пользователю создать отдельную ветку "
+                "(create_branch) и открыть pull request."
+            )
+        raise ToolError(f"git push завершился с ошибкой:\n{out}{hint}")
     _, sha = await run(ctx, "git rev-parse HEAD", 30)
     return (
         f"Запушено в ветку {ctx.work_branch}, коммит {sha.strip()[:12]}.\n"
@@ -181,7 +213,38 @@ async def t_git_commit_and_push(ctx: ToolContext, message: str) -> str:
     )
 
 
+async def t_create_branch(ctx: ToolContext, name: str) -> str:
+    name = (name or "").strip()
+    code, _ = await run(ctx, f"git check-ref-format --branch {shlex.quote(name)}", 30)
+    if code or not name:
+        raise ToolError(f"Недопустимое имя ветки: {name!r}. Пример: feature/login-form")
+    if name in (ctx.work_branch, ctx.base_branch):
+        raise ToolError(f"Ветка {name} уже используется в этой сессии — придумайте другое имя")
+    token = await ctx.gh_token()
+    code, _ = await run(ctx, f"git {git_auth_args(token)} ls-remote --exit-code --heads origin {shlex.quote(name)}", 60)
+    if code == 0:
+        raise ToolError(f"Ветка {name} уже есть на GitHub — придумайте другое имя")
+    # Новая ветка от текущего состояния: незакоммиченные изменения переходят в неё
+    code, out = await run(ctx, f"git checkout -q -b {shlex.quote(name)} 2>&1", 60)
+    if code:
+        raise ToolError(f"Не удалось создать ветку:\n{out}")
+    previous = ctx.work_branch
+    ctx.work_branch = name
+    ctx.pr_url = None
+    if ctx.on_branch:
+        await ctx.on_branch(name)
+    return (
+        f"Создана ветка {name} от {previous}; теперь git_commit_and_push пушит в неё. "
+        f"Pull request в {ctx.base_branch} открывайте только если пользователь попросит."
+    )
+
+
 async def t_create_pull_request(ctx: ToolContext, title: str, body: str = "", draft: bool = False) -> str:
+    if ctx.work_branch == ctx.base_branch:
+        raise ToolError(
+            f"Агент работает прямо в ветке {ctx.base_branch} — pull request из ветки в саму себя невозможен. "
+            "Если пользователь хочет PR, сначала создайте отдельную ветку (create_branch) и запушьте её."
+        )
     token = await ctx.gh_token()
     try:
         existing = await github_app.find_pull_request(token, ctx.repo, ctx.work_branch)
@@ -783,7 +846,8 @@ CORE_TOOLS: list[tuple[dict, Callable]] = [
     (
         _fn(
             "git_commit_and_push",
-            "Stage all changes, commit with the message and push the working branch to GitHub.",
+            "Stage all changes, commit with the message and push the working branch to GitHub "
+            "(if the remote branch moved on, your commits are rebased on top of it).",
             {"message": S},
             ["message"],
         ),
@@ -791,8 +855,19 @@ CORE_TOOLS: list[tuple[dict, Callable]] = [
     ),
     (
         _fn(
+            "create_branch",
+            "Create a new git branch from the current state (uncommitted changes included) and make it the working "
+            "branch: further pushes go there. Use ONLY when the user asked for a separate/new branch or a pull request.",
+            {"name": {**S, "description": "short meaningful name, e.g. feature/signup-form or fix/login-redirect"}},
+            ["name"],
+        ),
+        t_create_branch,
+    ),
+    (
+        _fn(
             "create_pull_request",
-            "Open a pull request from the working branch into the base branch (or return the existing one).",
+            "Open a pull request from the working branch into the base branch (or return the existing one). "
+            "Only when the user explicitly asked for a pull request.",
             {"title": S, "body": {**S, "description": "markdown description"}, "draft": B},
             ["title"],
         ),

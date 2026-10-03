@@ -80,13 +80,18 @@ async def test_full_agent_turn(app_env, monkeypatch):
         detail = (await client.get(f"/api/sessions/{sid}")).json()
         assert detail["status"] == "idle"
         assert detail["cost_rub"] > 0
+        assert detail["work_branch"] == "main" and detail["same_branch"]
 
+        # изменения видны и после пуша прямо в main — считаются от коммита, с которого начата работа
         ch = (await client.get(f"/api/sessions/{sid}/changes")).json()
         assert ch["available"] and [f["path"] for f in ch["files"]] == ["hello.py"]
         assert ch["files"][0]["additions"] == 1 and "+print('hello')" in ch["files"][0]["patch"]
 
-    # в «GitHub» появилась рабочая ветка с файлом
-    branch = f"agent/{sid[:8]}"
+    # агент запушил прямо в выбранную ветку, новых веток не создавал
+    branch = "main"
+    heads = subprocess.run(["git", "--git-dir", str(app_env["bare"]), "branch", "--format=%(refname:short)"],
+                           capture_output=True, text=True, check=True).stdout.split()
+    assert heads == ["main"]
     out = subprocess.run(["git", "--git-dir", str(app_env["bare"]), "show", f"{branch}:hello.py"],
                          capture_output=True, text=True, check=True).stdout
     assert out == "print('hello')\n"

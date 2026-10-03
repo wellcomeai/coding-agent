@@ -25,6 +25,8 @@ export type SessionInfo = {
   repo_full_name: string;
   base_branch: string;
   work_branch: string;
+  /** агент работает прямо в выбранной ветке (новую ещё не создавал) */
+  same_branch: boolean;
   model: string;
   status: "idle" | "running" | "error";
   pr_url: string | null;

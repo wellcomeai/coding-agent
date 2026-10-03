@@ -4,6 +4,7 @@ import {
   Check,
   FlaskConical,
   GitBranch,
+  GitBranchPlus,
   Globe,
   Loader2,
   Lock,
@@ -35,6 +36,7 @@ export default function NewTask() {
   const [repo, setRepo] = useState("");
   const [branches, setBranches] = useState<string[] | null>(null);
   const [branch, setBranch] = useState("");
+  const [newBranch, setNewBranch] = useState(false);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const ta = useRef<HTMLTextAreaElement>(null);
@@ -101,7 +103,7 @@ export default function NewTask() {
     try {
       const s = await api<SessionInfo>("/api/sessions", {
         method: "POST",
-        json: { repo_full_name: repo, base_branch: branch || undefined, message: text.trim() },
+        json: { repo_full_name: repo, base_branch: branch || undefined, new_branch: newBranch, message: text.trim() },
       });
       refreshSessions();
       window.location.hash = `#/s/${s.id}`;
@@ -120,7 +122,7 @@ export default function NewTask() {
       <h1>
         {greet}, {firstName}
       </h1>
-      <p className="lead">Опишите задачу — агент напишет код, проверит его, откроет pull request и задеплоит.</p>
+      <p className="lead">Опишите задачу — агент напишет код, проверит его, запушит в выбранную ветку и задеплоит.</p>
 
       {noRepos ? (
         <div className="card card-pad" style={{ textAlign: "center" }}>
@@ -170,10 +172,23 @@ export default function NewTask() {
               items={branchItems}
               onChange={setBranch}
               placeholder="Ветка"
-              title="Базовая ветка"
+              title={newBranch ? "Базовая ветка" : "Ветка, в которой работает агент"}
               searchable={branchItems.length > 8}
               direction="down"
             />
+            <button
+              type="button"
+              className={"picker-btn toggle" + (newBranch ? " on" : "")}
+              aria-pressed={newBranch}
+              onClick={() => setNewBranch((v) => !v)}
+              title={
+                newBranch
+                  ? "Агент создаст новую ветку от выбранной и придумает ей имя"
+                  : "Агент пушит прямо в выбранную ветку. Включите, чтобы он работал в новой"
+              }
+            >
+              <GitBranchPlus size={14} /> <span className="lbl">Новая ветка</span>
+            </button>
             <div className="spacer" />
             <span className="faint small nowrap hide-sm" style={{ marginRight: 4 }}>
               <kbd>Enter</kbd> — запустить

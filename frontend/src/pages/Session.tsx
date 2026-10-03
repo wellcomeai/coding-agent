@@ -156,6 +156,7 @@ export default function SessionView({ id }: { id: string }) {
       }
       if (ev.type === "usage") setCost((c) => c + ev.data.cost_rub);
       if (ev.type === "pr") setInfo((i) => (i ? { ...i, pr_url: ev.data.url } : i));
+      if (ev.type === "branch") loadInfo().catch(() => {});
       setItems((prev) => reduce(prev, ev));
     };
     return () => es.close();
@@ -271,14 +272,16 @@ export default function SessionView({ id }: { id: string }) {
                 <a className="menu-item" href={info.branch_url} target="_blank" rel="noreferrer">
                   <GitBranch size={15} /> Ветка на GitHub
                 </a>
-                <a
-                  className="menu-item"
-                  href={`https://github.com/${info.repo_full_name}/compare/${info.base_branch}...${info.work_branch}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <ExternalLink size={15} /> Сравнение веток
-                </a>
+                {!info.same_branch && (
+                  <a
+                    className="menu-item"
+                    href={`https://github.com/${info.repo_full_name}/compare/${info.base_branch}...${info.work_branch}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <ExternalLink size={15} /> Сравнение веток
+                  </a>
+                )}
                 <div className="divider" />
                 <button className="menu-item" style={{ color: "var(--danger)" }} onClick={remove}>
                   <Trash2 size={15} /> Удалить сессию
@@ -476,12 +479,16 @@ function DetailsPanel({
           </a>
         </div>
         <div className="detail">
-          <div className="detail-label">Ветки</div>
+          <div className="detail-label">{info.same_branch ? "Ветка" : "Ветки"}</div>
           <div className="branch-flow">
-            <span className="mono ellipsis" title={info.base_branch}>
-              {info.base_branch}
-            </span>
-            <ArrowDown size={13} className="faint" />
+            {!info.same_branch && (
+              <>
+                <span className="mono ellipsis" title={info.base_branch}>
+                  {info.base_branch}
+                </span>
+                <ArrowDown size={13} className="faint" />
+              </>
+            )}
             <a className="mono ellipsis" href={info.branch_url} target="_blank" rel="noreferrer" title={info.work_branch}>
               {info.work_branch}
             </a>
@@ -566,7 +573,9 @@ function Changes({ info }: { info: SessionInfo }) {
             </span>
           )}
         </div>
-        <span className="faint small">относительно {info.base_branch}</span>
+        <span className="faint small">
+          {info.same_branch ? "с начала работы агента" : `относительно ${info.base_branch}`}
+        </span>
         <div className="spacer" />
         <button className="btn sm ghost" onClick={load} disabled={loading}>
           <RefreshCw size={14} className={loading ? "spin" : ""} /> Обновить
@@ -576,7 +585,11 @@ function Changes({ info }: { info: SessionInfo }) {
         <div className="callout">
           Песочница сейчас остановлена — изменения сохранены в ветке.{" "}
           <a
-            href={`https://github.com/${info.repo_full_name}/compare/${info.base_branch}...${info.work_branch}`}
+            href={
+              info.same_branch
+                ? `https://github.com/${info.repo_full_name}/commits/${info.work_branch}`
+                : `https://github.com/${info.repo_full_name}/compare/${info.base_branch}...${info.work_branch}`
+            }
             target="_blank"
             rel="noreferrer"
           >

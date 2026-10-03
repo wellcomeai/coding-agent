@@ -10,7 +10,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import billing, github_app
-from ..agent.runner import runner
+from ..agent.prompts import NEW_BRANCH_NOTE
+from ..agent.runner import START_REF, runner
 from ..config import get_settings
 from ..db import get_db, session_factory
 from ..deps import current_user, user_github_token
@@ -25,6 +26,8 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 class CreateSession(BaseModel):
     repo_full_name: str
     base_branch: str | None = None
+    # True — агент создаёт новую ветку от base_branch; иначе работает прямо в base_branch
+    new_branch: bool = False
     model: str | None = None  # устарело, игнорируется
     message: str | None = Field(default=None, max_length=50_000)
 
@@ -40,6 +43,7 @@ def serialize(s: AgentSession, running: bool | None = None) -> dict:
         "repo_full_name": s.repo_full_name,
         "base_branch": s.base_branch,
         "work_branch": s.work_branch,
+        "same_branch": s.work_branch == s.base_branch,
         "model": s.model,
         "status": "running" if running else s.status,
         "pr_url": s.pr_url,
@@ -81,14 +85,17 @@ async def create_session(body: CreateSession, user: User = Depends(current_user)
     if body.message and user.balance_micro <= 0:
         raise HTTPException(402, "Недостаточно средств на балансе")
     sid = str(uuid.uuid4())
+    base_branch = body.base_branch or repo["default_branch"]
     sess = AgentSession(
         id=sid,
         user_id=user.id,
         repo_full_name=repo["full_name"],
         installation_id=repo["installation_id"],
-        base_branch=body.base_branch or repo["default_branch"],
-        work_branch=f"agent/{sid[:8]}",
+        base_branch=base_branch,
+        # Агент работает в выбранной ветке; новую создаёт инструментом create_branch, если попросили
+        work_branch=base_branch,
         model=model,
+        history_json=json.dumps([{"role": "user", "content": NEW_BRANCH_NOTE}] if body.new_branch else [], ensure_ascii=False),
     )
     db.add(sess)
     await db.commit()
@@ -196,7 +203,11 @@ async def changes(session_id: str, user: User = Depends(current_user), db: Async
     sb = await get_provider().get(sess.sandbox_id) if sess.sandbox_id else None
     if not sb:
         return {"available": False, "files": []}
-    base = shlex.quote(f"origin/{sess.base_branch}")
+    if sess.work_branch == sess.base_branch:
+        # Агент пушит прямо в выбранную ветку: сравниваем с коммитом, с которого начата работа
+        base = f"$(git rev-parse -q --verify {START_REF} || echo {shlex.quote(f'origin/{sess.base_branch}')})"
+    else:
+        base = shlex.quote(f"origin/{sess.base_branch}")
     numstat = await sb.exec(f"git add -A -N . && git diff --numstat {base}", timeout=60)
     patch = await sb.exec(f"git diff --no-color {base} | head -c 400000", timeout=60)
     if numstat.exit_code != 0:
