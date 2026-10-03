@@ -513,6 +513,33 @@ kbd {
   font-size: 12px;
   color: var(--text-3);
 }
+.side-del {
+  display: none;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-right: -4px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.side-item:hover .side-del,
+.side-del:focus-visible {
+  display: inline-flex;
+}
+.side-del:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+@media (hover: none) {
+  .side-del {
+    display: inline-flex;
+  }
+}
 .side-item .body {
   display: flex;
   flex-direction: column;

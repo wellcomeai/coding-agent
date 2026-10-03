@@ -24,7 +24,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { AgentEvent, api, FileChange, SessionInfo } from "../api";
+import { AgentEvent, api, FileChange, SessionInfo, deleteSession } from "../api";
 import { useApp } from "../App";
 import AutoTextarea from "../components/AutoTextarea";
 import { DiffView, parsePatch } from "../components/Diff";
@@ -199,8 +199,12 @@ export default function SessionView({ id }: { id: string }) {
   }
 
   async function remove() {
-    if (!confirm("Удалить сессию? Незакоммиченные изменения будут сохранены WIP-коммитом в рабочую ветку.")) return;
-    await api(`/api/sessions/${id}`, { method: "DELETE" });
+    if (!info) return;
+    try {
+      if (!(await deleteSession(info))) return;
+    } catch (e: any) {
+      return toast("error", e.message);
+    }
     refreshSessions();
     window.location.hash = "#/";
   }

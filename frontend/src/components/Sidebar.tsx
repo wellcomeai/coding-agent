@@ -12,16 +12,19 @@ import {
   Settings as SettingsIcon,
   Shield,
   Sun,
+  Trash2,
   Wallet,
   X,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
+import { deleteSession, SessionInfo } from "../api";
 import { useApp } from "../App";
 import { dateGroup, relTime, repoName, rub } from "../lib/format";
-import { Logo, useMedia, useOutside, useTheme } from "./ui";
+import { Logo, useMedia, useOutside, useTheme, useToast } from "./ui";
 
 export default function Sidebar({ path, onClose }: { path: string; onClose: () => void }) {
-  const { me, sessions, openTopUp, sidebarCollapsed, toggleSidebar } = useApp();
+  const { me, sessions, openTopUp, sidebarCollapsed, toggleSidebar, refreshSessions } = useApp();
+  const toast = useToast();
   const [q, setQ] = useState("");
   const [menu, setMenu] = useState(false);
   const [theme, setTheme] = useTheme();
@@ -41,6 +44,18 @@ export default function Sidebar({ path, onClose }: { path: string; onClose: () =
     }
     return out;
   }, [sessions, q]);
+
+  async function remove(e: React.MouseEvent, s: SessionInfo) {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      if (!(await deleteSession(s))) return;
+    } catch (err: any) {
+      return toast("error", err.message);
+    }
+    if (path === `/s/${s.id}`) window.location.hash = "#/";
+    refreshSessions();
+  }
 
   const mobile = useMedia("(max-width: 860px)");
   if (sidebarCollapsed && !mobile) return <Rail path={path} />;
@@ -92,6 +107,14 @@ export default function Sidebar({ path, onClose }: { path: string; onClose: () =
                   <span className="t ellipsis">{s.title}</span>
                   <span className="s ellipsis">{repoName(s.repo_full_name)}</span>
                 </span>
+                <button
+                  className="side-del"
+                  onClick={(e) => remove(e, s)}
+                  title="Удалить чат"
+                  aria-label={`Удалить чат ${s.title}`}
+                >
+                  <Trash2 size={14} />
+                </button>
               </a>
             ))}
           </div>

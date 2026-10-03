@@ -162,3 +162,15 @@ async def test_autosave_never_pushes_wip_into_selected_branch(app_env, monkeypat
         sess = await db.get(AgentSession, sid)
     set_llm(None)
     await runner.release_sandbox(sess, autosave=False)
+
+
+async def test_deleting_chat_leaves_no_autosave_branch(app_env, monkeypatch):
+    user = await make_user()
+    set_llm(StepLLM([("", [call("c1", "write_file", path="wip.txt", content="wip\n")]), ("Ок.", [])]))
+    async with client_for(monkeypatch, user) as client:
+        sid = (await client.post("/api/sessions", json={"repo_full_name": "owner/repo", "message": "x"})).json()["id"]
+        await runner.wait(sid)
+        assert (await client.delete(f"/api/sessions/{sid}")).json() == {"ok": True}
+        assert (await client.get(f"/api/sessions/{sid}")).status_code == 404
+    set_llm(None)
+    assert heads(app_env) == ["main"]

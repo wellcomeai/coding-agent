@@ -133,7 +133,9 @@ async def stop(session_id: str, user: User = Depends(current_user), db: AsyncSes
 async def delete_session(session_id: str, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
     sess = await _get_owned(db, session_id, user)
     await runner.stop(session_id)
-    await runner.release_sandbox(sess)
+    # WIP сохраняем только в отдельную ветку сессии: при работе прямо в выбранной ветке он попал бы
+    # во временную ветку автосохранения, которую после удаления чата уже никто не восстановит
+    await runner.release_sandbox(sess, autosave=sess.work_branch != sess.base_branch)
     await db.execute(delete(SessionEvent).where(SessionEvent.session_id == session_id))
     await db.delete(sess)
     await db.commit()

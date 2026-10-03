@@ -36,6 +36,16 @@ export type SessionInfo = {
   branch_url: string;
 };
 
+/** Удалить сессию после подтверждения пользователя. Возвращает true, если удалена. */
+export async function deleteSession(s: SessionInfo): Promise<boolean> {
+  const note = s.same_branch
+    ? "Незакоммиченные изменения будут потеряны, запушенные коммиты останутся в ветке."
+    : `Незакоммиченные изменения будут сохранены WIP-коммитом в ветку ${s.work_branch}.`;
+  if (!confirm(`Удалить чат «${s.title}»? ${note}`)) return false;
+  await api(`/api/sessions/${s.id}`, { method: "DELETE" });
+  return true;
+}
+
 export type AgentEvent = { type: string; data: any; seq: number | null; ts?: string };
 
 export type Price = { model: string; input_per_m_rub: number; output_per_m_rub: number; typical_task_rub: number };
