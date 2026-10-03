@@ -32,14 +32,39 @@ def session_factory() -> async_sessionmaker[AsyncSession]:
     return _sessionmaker
 
 
-async def create_all() -> None:
-    from . import models  # noqa: F401  регистрирует таблицы
+MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "migrations")
+# Первая миграция повторяет схему, которую раньше создавал create_all
+BASELINE_REVISION = "0001"
 
+
+def alembic_config(connection=None):
+    from alembic.config import Config
+
+    cfg = Config()
+    cfg.set_main_option("script_location", MIGRATIONS_DIR)
+    cfg.attributes["connection"] = connection
+    return cfg
+
+
+def _upgrade(connection) -> None:
+    from alembic import command
+    from sqlalchemy import inspect
+
+    cfg = alembic_config(connection)
+    tables = inspect(connection).get_table_names()
+    if "alembic_version" not in tables and "agent_sessions" in tables:
+        # База создана до перехода на миграции: схема уже как в базовой миграции
+        command.stamp(cfg, BASELINE_REVISION)
+    command.upgrade(cfg, "head")
+
+
+async def migrate() -> None:
+    """Привести схему базы к актуальной: применить новые миграции из app/migrations/versions."""
     if _engine is None:
         init_engine()
     assert _engine is not None
     async with _engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_upgrade)
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

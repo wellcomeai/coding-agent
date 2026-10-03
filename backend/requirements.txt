@@ -10,3 +10,4 @@ PyJWT[crypto]==2.15.1
 openai==3.23.0
 docker==7.2.0
 itsdangerous==2.2.0
+alembic==1.20.0

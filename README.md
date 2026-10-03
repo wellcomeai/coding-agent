@@ -28,6 +28,7 @@ LLM подключаются через **Timeweb AI Gateway** (Claude, GPT, Kim
 backend/            FastAPI: API, цикл агента, песочницы, GitHub App, Timeweb API, биллинг
   app/agent/        llm.py (AI Gateway, стриминг + tool calling), tools.py, runner.py, prompts.py
   app/sandbox/      docker_sandbox.py (прод), local_sandbox.py (только для разработки)
+  app/migrations/   миграции схемы БД (Alembic), применяются при старте приложения
   tests/            pytest: юнит-тесты, разбор стрима LLM, полный ход агента с git-remote
 frontend/           React + Vite SPA (собирается в образ и отдаётся бэкендом)
 sandbox/Dockerfile  образ песочницы: Node 22, Python 3, uv, git, ripgrep, build-essential
@@ -132,5 +133,26 @@ SANDBOX_PROVIDER=local uvicorn app.main:app --reload    # local — БЕЗ из�
 # frontend (проксирует /api на :8000)
 cd frontend && npm install && npm run dev
 ```
+
+### Изменение схемы базы
+
+Таблицы меняются только миграциями: при старте приложение само применяет новые файлы из
+`backend/app/migrations/versions` (старая база без миграций при первом запуске помечается базовой
+ревизией `0001`). После правки `app/models.py` добавьте миграцию — тест `test_migrations_match_models`
+упадёт, если модели и миграции разошлись. Черновик можно сгенерировать на пустой базе:
+
+```bash
+cd backend && python - <<'PY'
+from alembic import command
+from sqlalchemy import create_engine
+from app.db import alembic_config
+with create_engine("sqlite:///:memory:").begin() as conn:
+    cfg = alembic_config(conn)
+    command.upgrade(cfg, "head")
+    command.revision(cfg, "что изменилось", autogenerate=True, rev_id="0003")  # следующий номер
+PY
+```
+
+CI (`.github/workflows/ci.yml`) на каждый пуш запускает `ruff`, `pytest` и сборку фронтенда.
 
 Для docker-песочниц локально соберите образ: `docker build -t coding-agent-sandbox:latest sandbox/`.

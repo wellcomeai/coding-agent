@@ -174,3 +174,70 @@ async def test_deleting_chat_leaves_no_autosave_branch(app_env, monkeypatch):
         assert (await client.get(f"/api/sessions/{sid}")).status_code == 404
     set_llm(None)
     assert heads(app_env) == ["main"]
+
+
+async def test_changes_survive_sandbox_recreation(app_env, monkeypatch):
+    """«Изменения» считаются от исходного коммита сессии и после пересоздания песочницы."""
+    user = await make_user()
+    set_llm(StepLLM([("", [call("c1", "write_file", path="f.txt", content="f\n"),
+                           call("c2", "git_commit_and_push", message="F")]), ("Ок.", [])]))
+    async with client_for(monkeypatch, user) as client:
+        sid = (await client.post("/api/sessions", json={"repo_full_name": "owner/repo", "message": "x"})).json()["id"]
+        await runner.wait(sid)
+        async with session_factory()() as db:
+            sess = await db.get(AgentSession, sid)
+        assert sess.start_sha and git_bare(app_env, "rev-parse", "main~1").strip() == sess.start_sha
+        await runner.release_sandbox(sess)
+
+        set_llm(StepLLM([("", [call("c3", "bash", command="true")]), ("Ок.", [])]))
+        await client.post(f"/api/sessions/{sid}/messages", json={"text": "дальше"})
+        await runner.wait(sid)
+        ch = (await client.get(f"/api/sessions/{sid}/changes")).json()
+    assert [f["path"] for f in ch["files"]] == ["f.txt"]
+    async with session_factory()() as db:
+        sess = await db.get(AgentSession, sid)
+    set_llm(None)
+    await runner.release_sandbox(sess, autosave=False)
+
+
+async def test_list_branches_reads_every_page(monkeypatch):
+    pages = {1: [f"b{i}" for i in range(100)], 2: [f"b{i}" for i in range(100, 200)], 3: ["last"]}
+    seen = []
+
+    async def fake_request(method, path, token=None, **kw):
+        page = int(path.rsplit("page=", 1)[1])
+        seen.append(page)
+        return [{"name": n} for n in pages.get(page, [])]
+
+    monkeypatch.setattr(github_app, "_request", fake_request)
+    names = await github_app.list_branches("t", "o/r")
+    assert len(names) == 201 and names[-1] == "last" and seen == [1, 2, 3]
+
+
+async def test_sessions_search_paging_and_rename(app_env):
+    from app.main import create_app
+
+    user = await make_user()
+    async with session_factory()() as db:
+        for i in range(5):
+            db.add(AgentSession(id=f"s{i}", user_id=user.id, repo_full_name="owner/repo", installation_id=1,
+                                base_branch="main", work_branch="main", model="m", title=f"Задача {i}"))
+        db.add(AgentSession(id="x", user_id=user.id, repo_full_name="owner/other", installation_id=1,
+                            base_branch="main", work_branch="main", model="m", title="Логин 100%"))
+        await db.commit()
+    c = httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app()), base_url="http://test")
+    c.cookies.set(SESSION_COOKIE, sign_session(user.id))
+    async with c as client:
+        r = (await client.get("/api/sessions?limit=4")).json()
+        assert len(r["sessions"]) == 4 and r["has_more"]
+        r = (await client.get("/api/sessions?limit=10")).json()
+        assert len(r["sessions"]) == 6 and not r["has_more"]
+        assert [s["id"] for s in (await client.get("/api/sessions?q=other")).json()["sessions"]] == ["x"]
+        assert [s["id"] for s in (await client.get("/api/sessions?q=100%")).json()["sessions"]] == ["x"]
+        assert (await client.get("/api/sessions?q=%25%25%25")).json()["sessions"] == []
+
+        r = await client.patch("/api/sessions/s1", json={"title": "  Новое   имя "})
+        assert r.status_code == 200 and r.json()["title"] == "Новое имя"
+        assert (await client.patch("/api/sessions/s1", json={"title": "   "})).status_code == 422
+        assert (await client.patch("/api/sessions/nope", json={"title": "a"})).status_code == 404
+        assert (await client.get("/api/sessions/s1")).json()["title"] == "Новое имя"

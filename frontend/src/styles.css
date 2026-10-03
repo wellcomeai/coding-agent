@@ -531,9 +531,21 @@ kbd {
 .side-del:focus-visible {
   display: inline-flex;
 }
+.side-del + .side-del {
+  margin-left: -6px;
+}
 .side-del:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+.side-del.danger:hover {
   color: var(--danger);
   background: var(--danger-soft);
+}
+.side-rename {
+  height: 30px;
+  padding: 0 8px;
+  font-size: 13.5px;
 }
 @media (hover: none) {
   .side-del {

@@ -7,6 +7,7 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
   Plus,
   Search,
   Settings as SettingsIcon,
@@ -16,25 +17,63 @@ import {
   Wallet,
   X,
 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
-import { deleteSession, SessionInfo } from "../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, deleteSession, renameSession, SessionInfo, SessionPage } from "../api";
 import { useApp } from "../App";
 import { dateGroup, relTime, repoName, rub } from "../lib/format";
 import { Logo, useMedia, useOutside, useTheme, useToast } from "./ui";
 
 export default function Sidebar({ path, onClose }: { path: string; onClose: () => void }) {
-  const { me, sessions, openTopUp, sidebarCollapsed, toggleSidebar, refreshSessions } = useApp();
+  const { me, sessions, openTopUp, sidebarCollapsed, toggleSidebar, refreshSessions, hasMoreSessions, loadMoreSessions } =
+    useApp();
   const toast = useToast();
   const [q, setQ] = useState("");
+  // Поиск идёт на сервере: так находятся и старые чаты, которых нет среди загруженных
+  const [found, setFound] = useState<SessionPage | null>(null);
+  const [searchTick, setSearchTick] = useState(0);
+  const [editing, setEditing] = useState<string | null>(null);
+
+  useEffect(() => {
+    const query = q.trim();
+    if (!query) {
+      setFound(null);
+      return;
+    }
+    let alive = true;
+    const t = setTimeout(() => {
+      api<SessionPage>(`/api/sessions?limit=100&q=${encodeURIComponent(query)}`)
+        .then((r) => alive && setFound(r))
+        .catch(() => alive && setFound({ sessions: [], has_more: false }));
+    }, 250);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [q, searchTick]);
+
+  async function changed() {
+    await refreshSessions();
+    if (q.trim()) setSearchTick((n) => n + 1);
+  }
+
+  async function rename(s: SessionInfo, title: string) {
+    setEditing(null);
+    const t = title.trim();
+    if (!t || t === s.title) return;
+    try {
+      await renameSession(s.id, t);
+      await changed();
+    } catch (err: any) {
+      toast("error", err.message);
+    }
+  }
   const [menu, setMenu] = useState(false);
   const [theme, setTheme] = useTheme();
   const menuRef = useRef<HTMLDivElement>(null);
   useOutside(menuRef, () => setMenu(false), menu);
 
   const groups = useMemo(() => {
-    const list = (sessions || []).filter(
-      (s) => !q || (s.title + " " + s.repo_full_name).toLowerCase().includes(q.toLowerCase()),
-    );
+    const list = (q.trim() ? found?.sessions : sessions) || [];
     const out: [string, typeof list][] = [];
     for (const s of list) {
       const g = dateGroup(s.last_activity_at);
@@ -43,7 +82,7 @@ export default function Sidebar({ path, onClose }: { path: string; onClose: () =
       else out.push([g, [s]]);
     }
     return out;
-  }, [sessions, q]);
+  }, [sessions, found, q]);
 
   async function remove(e: React.MouseEvent, s: SessionInfo) {
     e.preventDefault();
@@ -54,7 +93,7 @@ export default function Sidebar({ path, onClose }: { path: string; onClose: () =
       return toast("error", err.message);
     }
     if (path === `/s/${s.id}`) window.location.hash = "#/";
-    refreshSessions();
+    changed();
   }
 
   const mobile = useMedia("(max-width: 860px)");
@@ -78,7 +117,7 @@ export default function Sidebar({ path, onClose }: { path: string; onClose: () =
         <a href="#/" className="btn primary block">
           <Plus size={16} /> Новая задача
         </a>
-        {sessions && sessions.length > 5 && (
+        {((sessions && sessions.length > 5) || hasMoreSessions || q) && (
           <div className="input-wrap">
             <Search size={15} />
             <input className="input" placeholder="Поиск по сессиям" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -89,7 +128,12 @@ export default function Sidebar({ path, onClose }: { path: string; onClose: () =
       <nav className="sidebar-list">
         {sessions === null &&
           [0, 1, 2, 3].map((i) => <div key={i} className="skeleton" style={{ height: 40, margin: "8px 6px" }} />)}
-        {sessions && sessions.length === 0 && (
+        {q.trim() && found && found.sessions.length === 0 && (
+          <div className="faint small" style={{ padding: "16px 10px" }}>
+            Ничего не найдено
+          </div>
+        )}
+        {!q.trim() && sessions && sessions.length === 0 && (
           <div className="faint small" style={{ padding: "16px 10px" }}>
             Здесь появятся ваши задачи. Начните с первой — опишите, что нужно сделать в репозитории.
           </div>
@@ -97,7 +141,28 @@ export default function Sidebar({ path, onClose }: { path: string; onClose: () =
         {groups.map(([label, items]) => (
           <div key={label}>
             <div className="group-label">{label}</div>
-            {items.map((s) => (
+            {items.map((s) =>
+              editing === s.id ? (
+                <div key={s.id} className="side-item active">
+                  <input
+                    className="input side-rename"
+                    defaultValue={s.title}
+                    maxLength={255}
+                    autoFocus
+                    onFocus={(e) => e.currentTarget.select()}
+                    onBlur={(e) => rename(s, e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") e.currentTarget.blur();
+                      if (e.key === "Escape") {
+                  // Вернуть прежнее название: при потере фокуса сохранять нечего
+                  e.currentTarget.value = s.title;
+                  e.currentTarget.blur();
+                }
+                    }}
+                    aria-label="Название чата"
+                  />
+                </div>
+              ) : (
               <a key={s.id} href={`#/s/${s.id}`} className={"side-item" + (path === `/s/${s.id}` ? " active" : "")}>
                 <span
                   className={"status-dot " + (s.status === "running" ? "running" : s.status === "error" ? "error" : s.pr_url ? "pr" : "")}
@@ -109,6 +174,18 @@ export default function Sidebar({ path, onClose }: { path: string; onClose: () =
                 </span>
                 <button
                   className="side-del"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setEditing(s.id);
+                  }}
+                  title="Переименовать"
+                  aria-label={`Переименовать чат ${s.title}`}
+                >
+                  <Pencil size={13} />
+                </button>
+                <button
+                  className="side-del danger"
                   onClick={(e) => remove(e, s)}
                   title="Удалить чат"
                   aria-label={`Удалить чат ${s.title}`}
@@ -116,9 +193,20 @@ export default function Sidebar({ path, onClose }: { path: string; onClose: () =
                   <Trash2 size={14} />
                 </button>
               </a>
-            ))}
+              ),
+            )}
           </div>
         ))}
+        {!q.trim() && hasMoreSessions && (
+          <button className="btn ghost sm block" style={{ margin: "6px 0 10px" }} onClick={loadMoreSessions}>
+            Показать ещё
+          </button>
+        )}
+        {q.trim() && found?.has_more && (
+          <div className="faint small" style={{ padding: "8px 10px" }}>
+            Показаны первые 100 — уточните запрос
+          </div>
+        )}
       </nav>
 
       <div className="sidebar-bottom">

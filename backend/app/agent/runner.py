@@ -29,8 +29,8 @@ HISTORY_CHAR_BUDGET = 350_000
 # сжатие правит очередное старое сообщение и сбрасывает кэш промпта почти на каждом вызове модели.
 COMPACT_TARGET = 0.6
 KEEP_RECENT = 8
-# Ссылка в песочнице на коммит, с которого начата работа: от неё считаются «Изменения», когда агент
-# работает прямо в выбранной ветке (origin/<ветка> после пуша уже содержит его коммиты)
+# Ссылка в песочнице на коммит, с которого начата работа (AgentSession.start_sha): от неё считаются
+# «Изменения», когда агент работает прямо в выбранной ветке (origin/<ветка> после пуша уже содержит его коммиты)
 START_REF = "refs/agent/start"
 
 
@@ -145,8 +145,16 @@ class AgentRunner:
             f"if git rev-parse -q --verify origin/{q(sess.work_branch)} >/dev/null; then "
             f"git checkout -q -B {q(sess.work_branch)} origin/{q(sess.work_branch)}; "
             f"else git checkout -q -B {q(sess.work_branch)} origin/{q(sess.base_branch)}; fi && "
-            f"git update-ref {START_REF} HEAD"
         )
+        if sess.start_sha:
+            # Новая песочница той же сессии: «Изменения» считаются от исходного коммита, если он ещё есть
+            start = q(sess.start_sha)
+            cmd += (
+                f"if git cat-file -e {start}^{{commit}} 2>/dev/null; then git update-ref {START_REF} {start}; "
+                f"else git update-ref {START_REF} HEAD; fi"
+            )
+        else:
+            cmd += f"git update-ref {START_REF} HEAD"
         if sess.work_branch == sess.base_branch:
             # Вернуть незакоммиченную работу, сохранённую при остановке песочницы, и убрать временную ветку
             backup = q(autosave_branch(sess.id))
@@ -160,6 +168,14 @@ class AgentRunner:
         res = await sb.exec(cmd, timeout=900, workdir=parent)
         if res.exit_code != 0:
             raise RuntimeError("Не удалось клонировать репозиторий:\n" + T.scrub(res.output, [token])[-2000:])
+        if not sess.start_sha:
+            head = await sb.exec(f"git rev-parse {START_REF}", timeout=60)
+            sha = head.output.strip()
+            if head.exit_code == 0 and len(sha) == 40:
+                async with session_factory()() as db:
+                    await db.execute(update(AgentSession).where(AgentSession.id == sess.id).values(start_sha=sha))
+                    await db.commit()
+                sess.start_sha = sha
 
     # ---------------- ход агента ----------------
 

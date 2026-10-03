@@ -46,6 +46,12 @@ export async function deleteSession(s: SessionInfo): Promise<boolean> {
   return true;
 }
 
+export type SessionPage = { sessions: SessionInfo[]; has_more: boolean };
+
+export async function renameSession(id: string, title: string): Promise<SessionInfo> {
+  return api<SessionInfo>(`/api/sessions/${id}`, { method: "PATCH", json: { title } });
+}
+
 export type AgentEvent = { type: string; data: any; seq: number | null; ts?: string };
 
 export type Price = { model: string; input_per_m_rub: number; output_per_m_rub: number; typical_task_rub: number };

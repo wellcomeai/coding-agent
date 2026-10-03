@@ -56,6 +56,9 @@ class AgentSession(Base):
     status: Mapped[str] = mapped_column(String(20), default="idle")
     sandbox_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pr_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Коммит, с которого агент начал работу: от него считаются «Изменения», когда агент пушит прямо в
+    # выбранную ветку. Запоминается при первом клонировании и переживает пересоздание песочницы
+    start_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
     # История диалога в формате OpenAI messages (JSON-строка)
     history_json: Mapped[str] = mapped_column(Text, default="[]")
     cost_micro: Mapped[int] = mapped_column(BigInteger, default=0)

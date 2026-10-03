@@ -24,7 +24,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { AgentEvent, api, FileChange, SessionInfo, deleteSession } from "../api";
+import { AgentEvent, api, FileChange, SessionInfo, deleteSession, renameSession } from "../api";
 import { useApp } from "../App";
 import AutoTextarea from "../components/AutoTextarea";
 import { DiffView, parsePatch } from "../components/Diff";
@@ -102,6 +102,7 @@ export default function SessionView({ id }: { id: string }) {
   const details = wide ? detailsPref : detailsMobile;
   const setDetails = wide ? setDetailsPref : setDetailsMobile;
   const toast = useToast();
+  const [editingTitle, setEditingTitle] = useState(false);
   const [info, setInfo] = useState<SessionInfo | null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState("");
@@ -198,6 +199,18 @@ export default function SessionView({ id }: { id: string }) {
     await api(`/api/sessions/${id}/stop`, { method: "POST" }).catch((e) => toast("error", e.message));
   }
 
+  async function saveTitle(value: string) {
+    setEditingTitle(false);
+    const t = value.trim();
+    if (!info || !t || t === info.title) return;
+    try {
+      setInfo(await renameSession(info.id, t));
+      refreshSessions();
+    } catch (e: any) {
+      toast("error", e.message);
+    }
+  }
+
   async function remove() {
     if (!info) return;
     try {
@@ -229,9 +242,33 @@ export default function SessionView({ id }: { id: string }) {
       <div className="session-wrap">
       <header className="session-header">
         <div className="session-header-inner">
-          <h1 className="session-title ellipsis" title={info?.title}>
-            {info?.title ?? " "}
-          </h1>
+          {editingTitle && info ? (
+            <input
+              className="input session-title-input"
+              defaultValue={info.title}
+              maxLength={255}
+              autoFocus
+              onFocus={(e) => e.currentTarget.select()}
+              onBlur={(e) => saveTitle(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                if (e.key === "Escape") {
+                  // Вернуть прежнее название: при потере фокуса сохранять нечего
+                  e.currentTarget.value = info.title;
+                  e.currentTarget.blur();
+                }
+              }}
+              aria-label="Название чата"
+            />
+          ) : (
+            <h1
+              className="session-title ellipsis editable"
+              title={info ? `${info.title} — нажмите, чтобы переименовать` : undefined}
+              onClick={() => info && setEditingTitle(true)}
+            >
+              {info?.title ?? " "}
+            </h1>
+          )}
           {running && (
             <span className="badge accent">
               <Loader2 size={12} className="spin" /> Работает

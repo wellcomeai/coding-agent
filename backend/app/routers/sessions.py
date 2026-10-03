@@ -3,10 +3,10 @@ import json
 import shlex
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import billing, github_app
@@ -30,6 +30,10 @@ class CreateSession(BaseModel):
     new_branch: bool = False
     model: str | None = None  # устарело, игнорируется
     message: str | None = Field(default=None, max_length=50_000)
+
+
+class UpdateSession(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
 
 
 class SendMessage(BaseModel):
@@ -62,13 +66,21 @@ async def _get_owned(db: AsyncSession, session_id: str, user: User) -> AgentSess
 
 
 @router.get("")
-async def list_sessions(user: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
-    rows = (
-        await db.execute(
-            select(AgentSession).where(AgentSession.user_id == user.id).order_by(AgentSession.last_activity_at.desc()).limit(100)
+async def list_sessions(
+    q: str = "",
+    limit: int = Query(50, ge=1, le=1000),
+    user: User = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(AgentSession).where(AgentSession.user_id == user.id)
+    if q.strip():
+        like = "%" + q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        stmt = stmt.where(
+            or_(AgentSession.title.ilike(like, escape="\\"), AgentSession.repo_full_name.ilike(like, escape="\\"))
         )
-    ).scalars().all()
-    return {"sessions": [serialize(s, runner.is_running(s.id)) for s in rows]}
+    # На одну строку больше, чтобы знать, есть ли ещё
+    rows = (await db.execute(stmt.order_by(AgentSession.last_activity_at.desc()).limit(limit + 1))).scalars().all()
+    return {"sessions": [serialize(s, runner.is_running(s.id)) for s in rows[:limit]], "has_more": len(rows) > limit}
 
 
 @router.post("")
@@ -127,6 +139,19 @@ async def send_message(
 async def stop(session_id: str, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
     await _get_owned(db, session_id, user)
     return {"stopped": await runner.stop(session_id)}
+
+
+@router.patch("/{session_id}")
+async def update_session(
+    session_id: str, body: UpdateSession, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
+):
+    sess = await _get_owned(db, session_id, user)
+    title = " ".join(body.title.split())
+    if not title:
+        raise HTTPException(422, "Название не может быть пустым")
+    sess.title = title
+    await db.commit()
+    return serialize(sess, runner.is_running(session_id))
 
 
 @router.delete("/{session_id}")

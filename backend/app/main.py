@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from .agent.runner import runner
 from .billing import price_book
 from .config import get_settings
-from .db import create_all, init_engine
+from .db import init_engine, migrate
 from .routers import account, auth, payments, repos, sessions, setup
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -31,7 +31,7 @@ async def _reaper() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_engine()
-    await create_all()
+    await migrate()
     await setup.apply_db_config()
     await runner.recover_after_restart()
     asyncio.create_task(price_book.refresh())

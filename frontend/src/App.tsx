@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { api, ApiError, Me, SessionInfo } from "./api";
+import { api, ApiError, Me, SessionInfo, SessionPage } from "./api";
 import Sidebar from "./components/Sidebar";
 import TopUpModal from "./components/TopUpModal";
 import { Logo, ToastProvider, useStoredFlag } from "./components/ui";
@@ -16,12 +16,17 @@ type Ctx = {
   refreshMe: () => Promise<void>;
   sessions: SessionInfo[] | null;
   refreshSessions: () => Promise<void>;
+  /** есть ли чаты старше загруженных */
+  hasMoreSessions: boolean;
+  loadMoreSessions: () => void;
   openTopUp: () => void;
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
 };
 const AppCtx = createContext<Ctx>(null as any);
 export const useApp = () => useContext(AppCtx);
+
+const PAGE = 50;
 
 function useHashRoute(): [string, URLSearchParams] {
   const read = () => {
@@ -67,6 +72,8 @@ export default function App() {
 function Shell({ me, refreshMe }: { me: Me; refreshMe: () => Promise<void> }) {
   const [path, query] = useHashRoute();
   const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
+  const [sessionLimit, setSessionLimit] = useState(PAGE);
+  const [hasMoreSessions, setHasMoreSessions] = useState(false);
   const [topUp, setTopUp] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [collapsed, setCollapsed] = useStoredFlag("sidebarCollapsed", false);
@@ -86,11 +93,14 @@ function Shell({ me, refreshMe }: { me: Me; refreshMe: () => Promise<void> }) {
 
   const refreshSessions = useCallback(async () => {
     try {
-      setSessions((await api<{ sessions: SessionInfo[] }>("/api/sessions")).sessions);
+      const page = await api<SessionPage>(`/api/sessions?limit=${sessionLimit}`);
+      setSessions(page.sessions);
+      setHasMoreSessions(page.has_more);
     } catch {
       /* ignore */
     }
-  }, []);
+  }, [sessionLimit]);
+  const loadMoreSessions = useCallback(() => setSessionLimit((n) => n + PAGE), []);
 
   useEffect(() => {
     refreshSessions();
@@ -113,6 +123,8 @@ function Shell({ me, refreshMe }: { me: Me; refreshMe: () => Promise<void> }) {
         refreshMe,
         sessions,
         refreshSessions,
+        hasMoreSessions,
+        loadMoreSessions,
         openTopUp: () => setTopUp(true),
         sidebarCollapsed: collapsed,
         toggleSidebar,

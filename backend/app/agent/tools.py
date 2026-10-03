@@ -801,7 +801,7 @@ def _fn(name: str, description: str, properties: dict, required: list[str] | Non
 
 
 S = {"type": "string"}
-I = {"type": "integer"}
+I = {"type": "integer"}  # noqa: E741 — короткие схемы параметров рядом с S и B
 B = {"type": "boolean"}
 
 CORE_TOOLS: list[tuple[dict, Callable]] = [

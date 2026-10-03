@@ -158,9 +158,18 @@ async def installation_token(installation_id: int, repo_full_name: str) -> str:
 # ---------- Репозиторий ----------
 
 
+BRANCH_PAGES = 30  # до 3000 веток: дальше список в выпадающем меню всё равно бесполезен
+
+
 async def list_branches(token: str, repo: str) -> list[str]:
-    data = await _request("GET", f"/repos/{repo}/branches?per_page=100", token)
-    return [b["name"] for b in data]  # type: ignore[union-attr]
+    """Все ветки репозитория: GitHub отдаёт их страницами по 100."""
+    names: list[str] = []
+    for page in range(1, BRANCH_PAGES + 1):
+        data = await _request("GET", f"/repos/{repo}/branches?per_page=100&page={page}", token)
+        names += [b["name"] for b in data]  # type: ignore[union-attr]
+        if len(data) < 100:  # type: ignore[arg-type]
+            break
+    return names
 
 
 async def branch_sha(token: str, repo: str, branch: str) -> str:

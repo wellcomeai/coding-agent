@@ -25,7 +25,7 @@ async def app_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_WEB_URL", f"file://{tmp_path}/gh")
     config.get_settings.cache_clear()
     db.init_engine()
-    await db.create_all()
+    await db.migrate()
     set_provider(LocalSandboxProvider(str(tmp_path / "sandboxes")))
 
     # bare-репозиторий owner/repo с веткой main

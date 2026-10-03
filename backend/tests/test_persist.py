@@ -20,7 +20,7 @@ async def test_state_survives_sandbox_and_merges_between_sessions(app_env):
 
     a = await provider.create("s-a")
     b = await provider.create("s-b")
-    await a.exec("mkdir -p ~/.opensaas-timeweb && echo '{\"db_password\": \"p1\"}' > ~/.opensaas-timeweb/app1.json "
+    await a.exec("mkdir -p ~/.opensaas-timeweb && echo '{\"db_password\": \"pw-Secret-42\"}' > ~/.opensaas-timeweb/app1.json "
                  "&& mkdir -p ~/junk && echo x > ~/junk/f", workdir="/")
     await b.exec("mkdir -p ~/.agent-state && echo note > ~/.agent-state/n.txt", workdir="/")
     assert await persist.save(a, uid) == 1  # ~/junk не сохраняется
@@ -30,12 +30,12 @@ async def test_state_survives_sandbox_and_merges_between_sessions(app_env):
 
     async with session_factory()() as db:
         row = await db.get(SandboxState, uid)
-        assert "p1" not in row.files_enc  # хранится зашифрованным
+        assert "pw-Secret-42" not in row.files_enc  # хранится зашифрованным (короткое значение могло бы случайно встретиться в шифртексте)
 
     c = await provider.create("s-c")
     assert await persist.restore(c, uid) == 2
     out = (await c.exec("cat ~/.opensaas-timeweb/app1.json ~/.agent-state/n.txt; ls ~/junk 2>&1", workdir="/")).output
-    assert '"db_password": "p1"' in out and "note" in out and "No such file" in out
+    assert '"db_password": "pw-Secret-42"' in out and "note" in out and "No such file" in out
     await c.destroy()
 
 
